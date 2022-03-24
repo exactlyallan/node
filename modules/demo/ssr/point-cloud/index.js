@@ -1,3 +1,5 @@
+#!/usr/bin/env -S node --experimental-vm-modules --trace-uncaught
+
 // Copyright (c) 2021, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,18 +14,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#pragma once
+const fastify = require('fastify')();
 
-#ifdef CUDA_TRY
-#undef CUDA_TRY
-#endif
-#ifdef CHECK_CUDA
-#undef CHECK_CUDA
-#endif
-#include <raft/cuda_utils.cuh>
-#ifdef CHECK_CUDA
-#undef CHECK_CUDA
-#endif
-#ifdef CUDA_TRY
-#undef CUDA_TRY
-#endif
+fastify  //
+  .register(require('./plugins/webrtc'), require('./plugins/point-cloud')(fastify))
+  .register(require('fastify-static'), {root: require('path').join(__dirname, 'public')})
+  .get('/', (req, reply) => reply.sendFile('video.html'));
+
+fastify.listen(8080).then(() => console.log('server ready'));

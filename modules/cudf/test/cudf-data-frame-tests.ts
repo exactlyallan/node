@@ -126,19 +126,19 @@ test('DataFrame.assign', () => {
   const col_3 = Series.new({type: new Int32(), data: new Int32Buffer(length)});
   const col_4 = Series.new({type: new Int32(), data: new Int32Buffer(length)});
 
-  const table_0 = new DataFrame({'col_0': col_0, 'col_1': col_1, 'col_2': col_2});
+  const table_0 = new DataFrame({col_0, col_1, col_2, 'col_3': col_1});
 
-  const table_1 = table_0.assign({'col_3': col_3});
+  const table_1 = table_0.assign({col_3});
   expect(table_1.numColumns).toBe(4);
   expect(table_1.numRows).toBe(length);
   expect(table_1.names).toStrictEqual(['col_0', 'col_1', 'col_2', 'col_3']);
 
   // testing DataFrame.assign(DataFrame)
-  const table_2 = new DataFrame({'col_4': col_4});
+  const table_2 = new DataFrame({col_4});
   const table_3 = table_0.assign(table_2);
-  expect(table_3.numColumns).toBe(4);
+  expect(table_3.numColumns).toBe(5);
   expect(table_3.numRows).toBe(length);
-  expect(table_3.names).toStrictEqual(['col_0', 'col_1', 'col_2', 'col_4']);
+  expect(table_3.names).toStrictEqual(['col_0', 'col_1', 'col_2', 'col_3', 'col_4']);
 });
 
 test('DataFrame.drop', () => {
@@ -159,6 +159,26 @@ test('DataFrame.drop', () => {
   expect(table_1.numColumns).toBe(2);
   expect(table_1.numRows).toBe(length);
   expect(table_1.names).toStrictEqual(['col_0', 'col_2']);
+});
+
+test('DataFrame.rename', () => {
+  const length = 100;
+  const col_0  = Series.new({type: new Int32(), data: new Int32Buffer(length)});
+
+  const col_1 = Series.new({
+    type: new Bool8(),
+    data: new Uint8Buffer(length),
+    nullMask: new Uint8Buffer(64),
+  });
+
+  const col_2 = Series.new({type: new Int32(), data: new Int32Buffer(length)});
+
+  const table_0 = new DataFrame({col_0, col_1, col_2});
+
+  const table_1 = table_0.rename({col_1: 'col_1_renamed', col_2: 2});
+  expect(table_1.numColumns).toBe(3);
+  expect(table_1.numRows).toBe(length);
+  expect(table_1.names).toStrictEqual(['2', 'col_0', 'col_1_renamed']);
 });
 
 test('DataFrame.orderBy (ascending, non-null)', () => {
@@ -319,7 +339,7 @@ test('DataFrame groupBy (single)', () => {
   expect(out instanceof GroupBySingle).toBe(true);
 });
 
-test('DataFrame groupBy (single)', () => {
+test('DataFrame groupBy (multiple)', () => {
   const a   = Series.new({type: new Int32, data: [1, 2, 3, 1, 2, 2, 1, 3, 3, 2]});
   const aa  = Series.new({type: new Int32, data: [1, 2, 3, 1, 2, 2, 1, 3, 3, 2]});
   const b   = Series.new({type: new Float32, data: [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]});

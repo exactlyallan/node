@@ -13,9 +13,8 @@
 // limitations under the License.
 
 import {clampRange as clamp, Float32Buffer} from '@rapidsai/cuda';
-import {DataFrame, Float32, Series, Uint32, Uint64, Uint8, Utf8String} from '@rapidsai/cudf';
-import {GraphCOO} from '@rapidsai/cugraph';
-import {DeviceBuffer} from '@rapidsai/rmm';
+import {DataFrame, Float32, Int32, Series, Uint32, Uint64, Uint8, Utf8String} from '@rapidsai/cudf';
+import {Graph} from '@rapidsai/cugraph';
 import * as Arrow from 'apache-arrow';
 import {concat as concatAsync, zip as zipAsync} from 'ix/asynciterable';
 import {flatMap as flatMapAsync} from 'ix/asynciterable/operators';
@@ -128,8 +127,8 @@ export default async function* loadGraphData(props = {}) {
 
   let edgeDFs = getDataFrames(props.edges, getDefaultEdges, {
     name: new Utf8String,
-    src: new Uint32,
-    dst: new Uint32,
+    src: new Int32,
+    dst: new Int32,
     edge: new Uint64,
     color: new Uint64,
     bundle: new Uint64,
@@ -137,17 +136,29 @@ export default async function* loadGraphData(props = {}) {
   });
 
   /**
-   * @type DataFrame<{name: Utf8String, id: Uint32, color: Uint32, size: Uint8, x: Float32, y:
-   *   Float32}>
+   * @type DataFrame<{
+   *   name: Utf8String,
+   *   id: Uint32,
+   *   color: Uint32,
+   *   size: Uint8,
+   *   x: Float32,
+   *   y: Float32
+   * }>
    */
   let nodes = null;
   /**
-   * @type DataFrame<{name: Utf8String, src: Uint32, dst: Uint32, edge: Uint64, color: Uint64,
-   *   bundle: Uint64}>
+   * @type DataFrame<{
+   *   name: Utf8String,
+   *   src: Int32,
+   *   dst: Int32,
+   *   edge: Uint64,
+   *   color: Uint64,
+   *   bundle: Uint64
+   * }>
    */
   let edges = null;
   /**
-   * @type GraphCOO
+   * @type Graph
    */
   let graph = null;
   /**
@@ -177,52 +188,36 @@ export default async function* loadGraphData(props = {}) {
                             ? rendered
                             : Promise.race([rendered, nextFrames.then(({value} = {}) => value)]));
 
-    // If new nodes/edges, recreate the GraphCOO
+    // If new nodes/edges, recreate the Graph
     if (newDFs) {
       if (newDFs[0] !== nodes || newDFs[1] !== edges) {
         graphUpdated   = true;
         [nodes, edges] = newDFs;
         nextFrames     = dataframes.next();
-        graph          = new GraphCOO(     //
-          edges.get('src')._col,  //
-          edges.get('dst')._col,
-          {directedEdges: true});
+        graph          = Graph.fromEdgeList(edges.get('src'), edges.get('dst'));
       }
     }
 
-    const n = graph.numNodes();
-
-    // If new nodes, update existing positions
-    if (positions && positions.length < (n * 2)) {
-      // const p = new Float32Buffer(n * 2 * 4);
-      const p = new Float32Buffer(new DeviceBuffer(n * 2 * 4));
-      if (positions.length > 0) {
-        // copy X positions
-        p.copyFrom(positions, 0, 0, n);
-        // copy Y positions
-        p.copyFrom(positions, positions.length / 2, n);
-      }
-      positions = p;
-    }
+    const n = graph.numNodes;
 
     if (!layoutParams.simulating.val && !graphUpdated) {
       // If user paused rendering, wait a bit and continue
       rendered = new Promise((r) => (onAfterRender = () => setTimeout(r, 50)));
     } else {
       // Compute positions from the previous positions
-      positions = new Float32Buffer(graph.forceAtlas2({
-        positions: positions && positions.length === n * 2 ? positions.buffer : undefined,
+      positions = graph.forceAtlas2({
+        positions,
         ...layoutParamNames.reduce((params, name) => ({...params, [name]: layoutParams[name].val}),
                                    {})
-      }));
+      });
 
-      const positionSeries = Series.new({type: new Float32, data: positions});
+      const positionSeries = Series.new({type: new Float32, data: positions.buffer});
       if (positionSeries.isNaN().any()) { positions.copyFrom(positionSeries.replaceNaNs(0).data); }
 
       // Extract the x and y positions and assign them as columns in our nodes DF
       nodes = nodes.assign({
-        x: Series.new({type: new Float32, length: n, offset: 0, data: positions}),
-        y: Series.new({type: new Float32, length: n, offset: n, data: positions}),
+        x: Series.new({type: new Float32, length: n, offset: 0, data: positions.buffer}),
+        y: Series.new({type: new Float32, length: n, offset: n, data: positions.buffer}),
       });
 
       // Compute the positions minimum bounding box [xMin, xMax, yMin, yMax]
@@ -262,13 +257,13 @@ function promiseSubject() {
  *  name: Utf8String, id: Uint32, color: Uint32, size: Uint8, x: Float32,  y: Float32,
  * }>} nodes
  * @param {DataFrame<{
- *  name: Utf8String, src: Uint32, dst: Uint32, edge: Uint64,  color: Uint64,  bundle: Uint64,
+ *  name: Utf8String, src: Int32, dst: Int32, edge: Uint64,  color: Uint64,  bundle: Uint64,
  * }>} edges
  * @param {*} graph
  */
 function createGraphRenderProps(nodes, edges, graph) {
-  const numNodes = graph.numNodes();
-  const numEdges = graph.numEdges();
+  const numNodes = graph.numNodes;
+  const numEdges = graph.numEdges;
   return {
     numNodes, numEdges, nodeRadiusScale: 1 / 75,
       // nodeRadiusScale: 1/255,
@@ -377,7 +372,7 @@ function getDefaultEdges() {
   return new DataFrame({
     name: Series.new(Arrow.Utf8Vector.from(Array.from({length: 312}, (_, i) => `${i}`))),
     src: Series.new({
-      type: new Uint32,
+      type: new Int32,
       data: [
         1,  0,  1,  1,  1,  0,  1,  1,  1,  0,  1,  1,  1,  0,  1,  1,  1,  0,  1,  1,  1,  0,  1,
         1,  1,  0,  1,  1,  1,  0,  1,  1,  1,  0,  1,  1,  1,  0,  1,  1,  1,  0,  1,  1,  1,  0,
@@ -396,7 +391,7 @@ function getDefaultEdges() {
       ]
     }),
     dst: Series.new({
-      type: new Uint32,
+      type: new Int32,
       data: [
         2,  3,  4,  5,  6,  6,  7,  7,  8,  8,  8,  8,  9,  10, 11, 12, 14, 15, 16, 13, 17, 18, 17,
         17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 35, 35, 35, 36, 37,

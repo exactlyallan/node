@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021, NVIDIA CORPORATION.
+// Copyright (c) 2020-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -61,24 +61,29 @@ export class ColumnAccessor<T extends TypeMap = any> {
 
   addColumns<R extends TypeMap>(data: ColumnsMap<R>|ColumnAccessor<R>) {
     data = (data instanceof ColumnAccessor) ? data._data : data;
-    return new ColumnAccessor({...this._data, ...data} as ColumnsMap<T&R>);
+    return new ColumnAccessor(
+      {...this._data, ...data} as ColumnsMap<{
+        [P in keyof(T & R)]: P extends keyof R ? R[P]                      //
+                                               : P extends keyof T ? T[P]  //
+                                                                   : never
+      }>);
   }
 
-  dropColumns<R extends keyof T>(names: R[]) {
+  dropColumns<R extends keyof T>(names: readonly R[]) {
     const data     = {} as any;
     const namesMap = names.reduce((xs, x) => ({...xs, [x]: true}), {});
     for (const name of this.names) {
       if (!(name in namesMap)) { data[name] = this._data[name]; }
     }
-    return new ColumnAccessor<Omit<T, R>>(data);
+    return new ColumnAccessor(data as ColumnsMap<{[P in Exclude<keyof T, R>]: T[P]}>);
   }
 
   selectByColumnName<R extends keyof T>(name: R) { return this.selectByColumnNames([name]); }
 
-  selectByColumnNames<R extends keyof T>(names: R[]) {
+  selectByColumnNames<R extends keyof T>(names: readonly R[]) {
     const data: ColumnsMap<{[P in R]: T[P]}> = {} as any;
     for (const name of names) {
-      if (this._data[name]) { data[name] = this._data[name]; }
+      if (this._data[name] && !data[name]) { data[name] = this._data[name]; }
     }
     return new ColumnAccessor(data);
   }

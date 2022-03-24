@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021, NVIDIA CORPORATION.
+// Copyright (c) 2020-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,24 +14,11 @@
 
 import {MemoryResource} from '@rapidsai/rmm';
 
-import CUDF from '../addon';
-import {Column} from '../column';
+import * as CUDF from '../addon';
 import {DataFrame, SeriesMap} from '../data_frame';
+import {GroupByBaseProps, GroupByProps} from '../groupby';
 import {Series} from '../series';
-import {Table} from '../table';
-import {NullOrder} from '../types/enums';
 import {TypeMap} from '../types/mappings';
-
-export type GroupByBaseProps = {
-  include_nulls?: boolean,
-  keys_are_sorted?: boolean,
-  column_order?: boolean[],
-  null_precedence?: NullOrder[],
-}
-
-type CudfGroupByProps = {
-  keys: Table,
-}&GroupByBaseProps;
 
 export type Groups<KeysMap extends TypeMap, ValuesMap extends TypeMap> = {
   keys: DataFrame<KeysMap>,
@@ -39,30 +26,10 @@ export type Groups<KeysMap extends TypeMap, ValuesMap extends TypeMap> = {
   values?: DataFrame<ValuesMap>,
 }
 
-interface CudfGroupBy {
-  _getGroups(values?: Table,
-             memoryResource?: MemoryResource): {keys: Table, offsets: Int32Array, values?: Table};
-
-  _argmax(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _argmin(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _count(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _max(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _mean(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _median(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _min(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _nth(n: number, values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _nunique(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _std(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _sum(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _var(values: Table, memoryResource?: MemoryResource): {keys: Table, cols: Column[]};
-  _quantile(q: number, values: Table, interpolation?: number, memoryResource?: MemoryResource):
-    {keys: Table, cols: [Column]};
-}
-
 export class GroupByBase<T extends TypeMap, R extends keyof T> {
   protected _by: R[];
   protected _values: DataFrame<Omit<T, R>>;
-  protected _cudf_groupby: CudfGroupBy;
+  protected _cudf_groupby: InstanceType<typeof CUDF.GroupBy>;
 
   constructor(props: GroupByBaseProps, by: R[], obj: DataFrame<T>) {
     const table = obj.select(by).asTable();
@@ -74,7 +41,7 @@ export class GroupByBase<T extends TypeMap, R extends keyof T> {
       null_precedence = []
     } = props;
 
-    const cudf_props: CudfGroupByProps = {
+    const cudf_props: GroupByProps = {
       keys: table,
       include_nulls: include_nulls,
       keys_are_sorted: keys_are_sorted,

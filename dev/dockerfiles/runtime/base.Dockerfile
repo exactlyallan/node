@@ -17,7 +17,7 @@ ONBUILD RUN cd /usr/local/cuda/lib64 \
     libcudart.so \
  && rm /etc/ld.so.cache && ldconfig
 
-ONBUILD ARG ADDITIONAL_GROUPS="--groups sudo,video"
+ONBUILD ARG ADDITIONAL_GROUPS="--groups video"
 
 FROM base-${TARGETARCH}
 
@@ -88,6 +88,8 @@ RUN useradd --uid $UID --user-group ${ADDITIONAL_GROUPS} --shell /bin/bash --cre
  # smoke tests
  && node --version && npm --version && yarn --version
 
+ENV npm_config_fund=false
+ENV npm_config_update_notifier=false
 ENV NODE_OPTIONS="--experimental-vm-modules --trace-uncaught"
 
 WORKDIR /home/node

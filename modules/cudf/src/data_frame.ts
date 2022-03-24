@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021, NVIDIA CORPORATION.
+// Copyright (c) 2020-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,10 +24,10 @@ import {concat as concatDataFrames} from './dataframe/concat';
 import {Join, JoinResult} from './dataframe/join';
 import {DataFrameFormatter, DisplayOptions} from './dataframe/print';
 import {GroupByMultiple, GroupByMultipleProps, GroupBySingle, GroupBySingleProps} from './groupby';
-import {Scalar} from './scalar';
-import {AbstractSeries, Series} from './series';
+import {DISPOSER, scope} from './scope';
+import {Series} from './series';
 import {Table, ToArrowMetadata} from './table';
-import {CSVTypeMap, ReadCSVOptions, WriteCSVOptions} from './types/csv';
+import {ReadCSVOptions, WriteCSVOptions} from './types/csv';
 import {
   Bool8,
   DataType,
@@ -35,8 +35,10 @@ import {
   FloatTypes,
   IndexType,
   Int32,
+  Int64,
   Integral,
   IntegralTypes,
+  List,
   Numeric,
   NumericTypes,
 } from './types/dtypes';
@@ -45,8 +47,8 @@ import {ColumnsMap, CommonType, TypeMap} from './types/mappings';
 import {ReadORCOptions, WriteORCOptions} from './types/orc';
 import {ReadParquetOptions, WriteParquetOptions} from './types/parquet';
 
-export type SeriesMap<T extends TypeMap> = {
-  [P in keyof T]: AbstractSeries<T[P]>
+export type SeriesMap<T extends TypeMap = any> = {
+  [P in keyof T]: {readonly type: T[P]}
 };
 
 export type OrderSpec = {
@@ -100,7 +102,17 @@ function _throwIfNonNumeric(type: DataType, operationName: string) {
  */
 export class DataFrame<T extends TypeMap = any> {
   /**
-   * Read a csv from disk and create a cudf.DataFrame
+   * Construct a DataFrame from a Table and list of column names.
+   *
+   * @param table The cudf.Table instance
+   * @param names List of string Column names
+   */
+  public static fromTable<T extends TypeMap>(table: Table, names: readonly(string&keyof T)[]) {
+    return new DataFrame(names.reduce(
+      (map, name, i) => ({...map, [name]: table.getColumnByIndex(i)}), {} as ColumnsMap<T>));
+  }
+  /**
+   * Read CSV files from disk and create a cudf.DataFrame
    *
    * @example
    * ```typescript
@@ -118,15 +130,16 @@ export class DataFrame<T extends TypeMap = any> {
    * })
    * ```
    */
-  public static readCSV<T extends CSVTypeMap = any>(options: ReadCSVOptions<T>) {
+  public static readCSV<T extends TypeMap = any>(options: ReadCSVOptions<T>) {
     const {names, table} = Table.readCSV(options);
-    return new DataFrame(new ColumnAccessor(
-      names.reduce((map, name, i) => ({...map, [name]: table.getColumnByIndex(i)}),
-                   {} as ColumnsMap<{[P in keyof T]: T[P]}>)));
+    return DataFrame.fromTable<T>(table, names);
+    // return new DataFrame(new ColumnAccessor(
+    //   names.reduce((map, name, i) => ({...map, [name]: table.getColumnByIndex(i)}),
+    //                {} as ColumnsMap<{[P in keyof T]: T[P]}>)));
   }
 
   /**
-   * Read an Apache ORC from disk and create a cudf.DataFrame
+   * Read Apache ORC files from disk and create a cudf.DataFrame
    *
    * @example
    * ```typescript
@@ -144,7 +157,7 @@ export class DataFrame<T extends TypeMap = any> {
   }
 
   /**
-   * Read an Apache Parquet from disk and create a cudf.DataFrame
+   * Read Apache Parquet files from disk and create a cudf.DataFrame
    *
    * @example
    * ```typescript
@@ -177,7 +190,7 @@ export class DataFrame<T extends TypeMap = any> {
       (map, name, i) => ({...map, [name]: table.getColumnByIndex(i)}), {} as ColumnsMap<T>)));
   }
 
-  private _accessor: ColumnAccessor<T>;
+  declare private _accessor: ColumnAccessor<T>;
 
   /**
    * Create a new cudf.DataFrame
@@ -199,6 +212,7 @@ export class DataFrame<T extends TypeMap = any> {
   constructor(data: any = {}) {
     this._accessor =
       (data instanceof ColumnAccessor) ? data : new ColumnAccessor(_seriesToColumns(data));
+    DISPOSER.add(this.asTable());
   }
 
   /**
@@ -282,12 +296,8 @@ export class DataFrame<T extends TypeMap = any> {
    * options given.
    *
    * @param options
-   * @returns void
    */
-  toString(options: DisplayOptions = {}): string {
-    const formatter = new DataFrameFormatter(options, this);
-    return formatter.render();
-  }
+  toString(options: DisplayOptions = {}) { return new DataFrameFormatter(options, this).render(); }
 
   /**
    * Return a new DataFrame containing only specified columns.
@@ -306,14 +316,15 @@ export class DataFrame<T extends TypeMap = any> {
    * df.select(['a', 'b']) // returns df with {a, b}
    * ```
    */
-  select<R extends keyof T>(names: R[]) {
+  select<R extends keyof T>(names: readonly R[]) {
     return new DataFrame(this._accessor.selectByColumnNames(names));
   }
 
   /**
    * Return a new DataFrame with new columns added.
    *
-   * @param data mapping of names to new columns to add
+   * @param {SeriesMap<R>|DataFrame<R>} data mapping of names to new columns to add, or a GPU
+   *   DataFrame object
    *
    * @example
    * ```typescript
@@ -324,13 +335,6 @@ export class DataFrame<T extends TypeMap = any> {
    * df.assign({b: Series.new(["foo", "bar", "bar"])})
    * // returns df {a: [1, 2, 3], b: ["foo", "bar", "bar"]}
    * ```
-   */
-  assign<R extends TypeMap>(data: SeriesMap<R>): DataFrame<T&R>;
-
-  /**
-   * Return a new DataFrame with new columns added.
-   *
-   * @param data a GPU DataFrame object
    *
    * @example
    * ```typescript
@@ -342,8 +346,6 @@ export class DataFrame<T extends TypeMap = any> {
    * df.assign(df1) // returns df {a: [1, 2, 3], b: ["foo", "bar", "bar"]}
    * ```
    */
-  assign<R extends TypeMap>(data: DataFrame<R>): DataFrame<T&R>;
-
   assign<R extends TypeMap>(data: SeriesMap<R>|DataFrame<R>) {
     const columns = (data instanceof DataFrame) ? data._accessor : _seriesToColumns(data);
     return new DataFrame(this._accessor.addColumns(columns));
@@ -365,7 +367,33 @@ export class DataFrame<T extends TypeMap = any> {
    * df.drop(['a']) // returns df {b: [0, 1, 2, 3, 4, 4]}
    * ```
    */
-  drop<R extends keyof T>(names: R[]) { return new DataFrame(this._accessor.dropColumns(names)); }
+  drop<R extends keyof T>(names: readonly R[]) {
+    return new DataFrame(this._accessor.dropColumns(names));
+  }
+
+  /**
+   * Return a new DataFrame with specified columns renamed.
+   *
+   * @param nameMap Object mapping old to new Column names.
+   *
+   * @example
+   * ```typescript
+   * import {DataFrame, Series, Int32, Float32}  from '@rapidsai/cudf';
+   * const df = new DataFrame({
+   *  a: Series.new({type: new Int32, data: [0, 1, 1, 2, 2, 2]}),
+   *  b: Series.new({type: new Float32, data: [0, 1, 2, 3, 4, 4]})
+   * });
+   *
+   * df.rename({a: 'c'}) // returns df {b: [0, 1, 2, 3, 4, 4], c: [0, 1, 1, 2, 2, 2]}
+   * ```
+   */
+  rename<U extends string|number, P extends {[K in keyof T]?: U}>(nameMap: P) {
+    const names = Object.keys(nameMap) as (string & keyof P)[];
+    return this.drop(names).assign(
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      names.reduce((xs, x) => ({...xs, [`${nameMap[x]!}`]: this.get(x)}),
+                   {} as SeriesMap<{[K in keyof P as `${NonNullable<P[K]>}`]: T[string & K]}>));
+  }
 
   /**
    * Return whether the DataFrame has a Series.
@@ -425,7 +453,7 @@ export class DataFrame<T extends TypeMap = any> {
    * ```
    */
   cast<R extends {[P in keyof T]?: DataType}>(dataTypes: R, memoryResource?: MemoryResource) {
-    const names = this._accessor.names;
+    const names = this.names;
     const types = !(dataTypes instanceof arrow.DataType)
                     ? dataTypes
                     : names.reduce((types, name) => ({...types, [name]: dataTypes}), {} as R);
@@ -454,7 +482,7 @@ export class DataFrame<T extends TypeMap = any> {
    * ```
    */
   castAll<R extends DataType>(dataType: R, memoryResource?: MemoryResource) {
-    return new DataFrame(this._accessor.names.reduce(
+    return new DataFrame(this.names.reduce(
       (columns, name) => ({...columns, [name]: this.get(name).cast(dataType, memoryResource)}),
       {} as SeriesMap<{[P in keyof T]: R}>));
   }
@@ -494,6 +522,48 @@ export class DataFrame<T extends TypeMap = any> {
   }
 
   /**
+   * @summary Flatten the elements of this DataFrame's list columns, duplicating the corresponding
+   * rows for other columns in this DataFrame.
+   *
+   * @param {string[]} names Names of List Columns to flatten. Defaults to all list Columns.
+   * @param {boolean} [includeNulls=true] Whether to retain null entries and map empty lists to
+   *   null.
+   * @param memoryResource An optional MemoryResource used to allocate the result's device memory.
+   */
+  flatten<R extends string&keyof T>(names: readonly R[] = this.names as any,
+                                    includeNulls        = true,
+                                    memoryResource?: MemoryResource) {
+    const listColumnIndices =
+      names.map((n) => [this.types[n], this.names.indexOf(n)] as [DataType, number])
+        .filter(([t]) => arrow.DataType.isList(t))
+        .map(([, i]) => i);
+
+    type ListChild<T extends DataType> = T extends List ? T['valueType'] : T;
+
+    return scope(() => {
+      return listColumnIndices.reduce(
+        (df, i, j, a) => {
+          return scope(() => {
+                   const mr    = j === a.length - 1 ? memoryResource : undefined;
+                   const table = includeNulls ? df.asTable().explodeOuter(i, mr)  //
+                                              : df.asTable().explode(i, mr);
+                   return DataFrame.fromTable(table, this.names as any);
+                 }, [this]) as any;
+        },
+        new DataFrame<{
+          // clang-format off
+      [P in R | keyof T]:
+        P extends R
+        ? T[P] extends List
+          ? ListChild<T[P]>
+          : T[P]
+        : T[P]
+          // clang-format on
+        }>(this._accessor as any));
+    }, [this]);
+  }
+
+  /**
    * @summary Interleave columns of a DataFrame into a single Series.
    *
    * @param dataType The dtype of the result Series (required if the DataFrame has mixed dtypes).
@@ -503,7 +573,7 @@ export class DataFrame<T extends TypeMap = any> {
    *
    * @example
    * ```typescript
-   * import {DataFrame, Series }  from '@rapidsai/cudf';
+   * import {DataFrame, Series}  from '@rapidsai/cudf';
    *
    * new DataFrame({
    *  a: Series.new([1, 2, 3]),
@@ -607,14 +677,29 @@ export class DataFrame<T extends TypeMap = any> {
    * // {a: [null, 4, 3, 2, 1, 0], b: [0, 1, 2, 3, 4, 5]}
    * ```
    */
-  sortValues<R extends keyof T>(options: {[P in R]: OrderSpec}) {
-    return this.gather(this.orderBy(options));
+  sortValues<R extends keyof T>(options: {[P in R]: OrderSpec}, memoryResource?: MemoryResource) {
+    return this.gather(this.orderBy(options), false, memoryResource);
   }
 
   /**
-   * Return sub-selection from a DataFrame from the specified indices
+   * @summary Return sub-selection from a DataFrame using the specified integral indices.
    *
-   * @param selection
+   * @description Gathers the rows of the source columns according to `selection`, such that row "i"
+   * in the resulting Table's columns will contain row `selection[i]` from the source columns. The
+   * number of rows in the result table will be equal to the number of elements in selection. A
+   * negative value i in the selection is interpreted as i+n, where `n` is the number of rows in
+   * the source table.
+   *
+   * For dictionary columns, the keys column component is copied and not trimmed if the gather
+   * results in abandoned key elements.
+   *
+   * @param selection A Series of 8/16/32-bit signed or unsigned integer indices to gather.
+   * @param nullify_out_of_bounds If `true`, coerce rows that corresponds to out-of-bounds indices
+   *   in the selection to null. If `false`, skips all bounds checking for selection values. Pass
+   *   false if you are certain that the selection contains only valid indices for better
+   *   performance. If `false` and there are out-of-bounds indices in the selection, the behavior
+   *   is undefined. Defaults to `false`.
+   * @param memoryResource An optional MemoryResource used to allocate the result's device memory.
    *
    * @example
    * ```typescript
@@ -629,12 +714,14 @@ export class DataFrame<T extends TypeMap = any> {
    * df.gather(selection); // {a: [2, 4, 5], b: [2.0, 4.0, 5.0]}
    * ```
    */
-  gather<R extends IndexType>(selection: Series<R>, nullify_out_of_bounds = false) {
-    const temp       = new Table({columns: this._accessor.columns});
-    const columns    = temp.gather(selection._col, nullify_out_of_bounds);
+  gather<R extends IndexType>(selection: Series<R>,
+                              nullify_out_of_bounds = false,
+                              memoryResource?: MemoryResource) {
+    const columns    = this.asTable().gather(selection._col, nullify_out_of_bounds, memoryResource);
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach(
-      (name, index) => { series_map[name] = Series.new(columns.getColumnByIndex(index)); });
+    this.names.forEach((name, index) => {
+      series_map[name] = this.__constructChild(name, columns.getColumnByIndex(index));
+    });
     return new DataFrame(series_map);
   }
 
@@ -759,7 +846,7 @@ export class DataFrame<T extends TypeMap = any> {
   }
 
   /**
-   * Return sub-selection from a DataFrame from the specified boolean mask
+   * Return sub-selection from a DataFrame from the specified boolean mask.
    *
    * @param mask
    *
@@ -776,12 +863,12 @@ export class DataFrame<T extends TypeMap = any> {
    *
    * ```
    */
-  filter(mask: Series<Bool8>) {
-    const temp       = new Table({columns: this._accessor.columns});
-    const columns    = temp.gather(mask._col, false);
+  filter(mask: Series<Bool8>, memoryResource?: MemoryResource) {
+    const table      = this.asTable().applyBooleanMask(mask._col, memoryResource);
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach(
-      (name, index) => { series_map[name] = Series.new(columns.getColumnByIndex(index)); });
+    this.names.forEach((name, index) => {
+      series_map[name] = this.__constructChild(name, table.getColumnByIndex(index));
+    });
     return new DataFrame(series_map);
   }
 
@@ -837,7 +924,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   toCSV(options: WriteCSVOptions = {}) {
     const readable = new Readable({encoding: 'utf8'});
-    new Table({columns: this._accessor.columns}).writeCSV({
+    this.asTable().writeCSV({
       ...options,
       next(buf) { readable.push(buf); },
       complete() { readable.push(null); },
@@ -896,9 +983,13 @@ export class DataFrame<T extends TypeMap = any> {
       }
       return [name, type.children.map((f) => toArrowMetadata(f.name, f.type))];
     };
-    const names = this.names.map(
-      (name, i) => toArrowMetadata(<string|number>name, this._accessor.columns[i].type));
+    const names = this.names.map((name) => toArrowMetadata(<string|number>name, this.types[name]));
     return arrow.Table.from<T>(this.asTable().toArrow(names));
+  }
+
+  protected __constructChild<P extends keyof T, R extends T[P]>(name: P,
+                                                                col: Column<R>): Series<R> {
+    return (this.get(name) as any).__construct(col);
   }
 
   /**
@@ -909,19 +1000,19 @@ export class DataFrame<T extends TypeMap = any> {
     const column_indices: number[] = [];
     const allNames                 = this.names;
     subset.forEach((col) => {
-      if (allNames.includes(col)) {
+      if (this.has(col)) {
         column_indices.push(allNames.indexOf(col));
       } else {
         throw new Error(`Unknown column name: ${col.toString()}`);
       }
     });
 
-    const table_result = new Table({columns: this._accessor.columns});
-    const result       = table_result.dropNulls(column_indices, thresh);
-    return new DataFrame(
-      allNames.reduce((map, name, i) => ({...map, [name]: Series.new(result.getColumnByIndex(i))}),
-                      {} as SeriesMap<T>));
+    const result = this.asTable().dropNulls(column_indices, thresh);
+    return new DataFrame(allNames.reduce(
+      (map, name, i) => ({...map, [name]: this.__constructChild(name, result.getColumnByIndex(i))}),
+      {} as SeriesMap<T>));
   }
+
   /**
    * drop rows with NaN values (float type only)
    * @ignore
@@ -930,21 +1021,21 @@ export class DataFrame<T extends TypeMap = any> {
     const column_indices: number[] = [];
     const allNames                 = this.names;
     subset.forEach((col) => {
-      if (allNames.includes(col) && FloatTypes.some((t) => compareTypes(this.get(col).type, t))) {
+      if (this.has(col) && FloatTypes.some((t) => compareTypes(this.types[col], t))) {
         column_indices.push(allNames.indexOf(col));
-      } else if (!allNames.includes(col)) {
+      } else if (!this.has(col)) {
         throw new Error(`Unknown column name: ${col.toString()}`);
       } else {
         // col exists but not of floating type
         thresh -= 1;
       }
     });
-    const table_result = new Table({columns: this._accessor.columns});
-    const result       = table_result.dropNans(column_indices, thresh);
-    return new DataFrame(
-      allNames.reduce((map, name, i) => ({...map, [name]: Series.new(result.getColumnByIndex(i))}),
-                      {} as SeriesMap<T>));
+    const result = this.asTable().dropNans(column_indices, thresh);
+    return new DataFrame(allNames.reduce(
+      (map, name, i) => ({...map, [name]: this.__constructChild(name, result.getColumnByIndex(i))}),
+      {} as SeriesMap<T>));
   }
+
   /**
    * drop columns with nulls
    * @ignore
@@ -958,9 +1049,10 @@ export class DataFrame<T extends TypeMap = any> {
       if (!no_threshold_valid_count) { column_names.push(col as string); }
     });
 
-    return new DataFrame(column_names.reduce(
-      (map, name) => ({...map, [name]: Series.new(this._accessor.get(name))}), {} as SeriesMap<T>));
+    return new DataFrame(
+      column_names.reduce((map, name) => ({...map, [name]: this.get(name)}), {} as SeriesMap<T>));
   }
+
   /**
    * drop columns with NaN values(float type only)
    * @ignore
@@ -981,8 +1073,8 @@ export class DataFrame<T extends TypeMap = any> {
       }
     });
 
-    return new DataFrame(column_names.reduce(
-      (map, name) => ({...map, [name]: Series.new(this._accessor.get(name))}), {} as SeriesMap<T>));
+    return new DataFrame(
+      column_names.reduce((map, name) => ({...map, [name]: this.get(name)}), {} as SeriesMap<T>));
   }
 
   /**
@@ -1142,7 +1234,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   sin<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `sin`);
       series_map[name] = (ser as any).sin(memoryResource);
@@ -1169,7 +1261,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   cos<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `cos`);
       series_map[name] = (ser as any).cos(memoryResource);
@@ -1196,7 +1288,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   tan<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `tan`);
       series_map[name] = (ser as any).tan(memoryResource);
@@ -1223,7 +1315,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   asin<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `asin`);
       series_map[name] = (ser as any).asin(memoryResource);
@@ -1250,7 +1342,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   acos<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `acos`);
       series_map[name] = (ser as any).acos(memoryResource);
@@ -1277,7 +1369,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   atan<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `atan`);
       series_map[name] = (ser as any).atan(memoryResource);
@@ -1304,7 +1396,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   sinh<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `sinh`);
       series_map[name] = (ser as any).sinh(memoryResource);
@@ -1331,7 +1423,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   cosh<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `cosh`);
       series_map[name] = (ser as any).cosh(memoryResource);
@@ -1358,7 +1450,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   tanh<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `tanh`);
       series_map[name] = (ser as any).tanh(memoryResource);
@@ -1385,7 +1477,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   asinh<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `asinh`);
       series_map[name] = (ser as any).asinh(memoryResource);
@@ -1412,7 +1504,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   acosh<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `acosh`);
       series_map[name] = (ser as any).acosh(memoryResource);
@@ -1439,7 +1531,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   atanh<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `atanh`);
       series_map[name] = (ser as any).atanh(memoryResource);
@@ -1466,7 +1558,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   exp<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `exp`);
       series_map[name] = (ser as any).exp(memoryResource);
@@ -1493,7 +1585,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   log<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `log`);
       series_map[name] = (ser as any).log(memoryResource);
@@ -1520,7 +1612,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   sqrt<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `sqrt`);
       series_map[name] = (ser as any).sqrt(memoryResource);
@@ -1547,7 +1639,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   cbrt<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `cbrt`);
       series_map[name] = (ser as any).cbrt(memoryResource);
@@ -1574,7 +1666,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   ceil<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `ceil`);
       series_map[name] = (ser as any).ceil(memoryResource);
@@ -1601,7 +1693,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   floor<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `floor`);
       series_map[name] = (ser as any).floor(memoryResource);
@@ -1628,7 +1720,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   abs<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `abs`);
       series_map[name] = (ser as any).abs(memoryResource);
@@ -1655,7 +1747,7 @@ export class DataFrame<T extends TypeMap = any> {
    */
   not<P extends keyof T>(memoryResource?: MemoryResource) {
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name) => {
+    this.names.forEach((name) => {
       const ser = this.get(name);
       _throwIfNonNumeric(ser.type, `not`);
       series_map[name] = (ser as any).not(memoryResource);
@@ -1744,21 +1836,24 @@ export class DataFrame<T extends TypeMap = any> {
    * df2.sum(); // returns `never`
    * ```
    */
-  sum<P extends keyof T>(subset?: (keyof T)[], skipNulls = true, memoryResource?: MemoryResource) {
-    subset = (subset == undefined) ? this.names as (keyof T)[] : subset;
+  sum<P extends keyof T = keyof T>(subset?: readonly P[],
+                                   skipNulls = true,
+                                   memoryResource?: MemoryResource) {
+    subset = (subset == undefined) ? this.names as readonly P[] : subset;
     const containsAllFloatingPoint =
-      subset.every((name) => FloatTypes.some((t) => compareTypes(t, this.get(name).type)));
+      subset.every((name) => FloatTypes.some((t) => compareTypes(t, this.types[name])));
     const containsAllIntegral =
-      subset.every((name) => IntegralTypes.some((t) => compareTypes(t, this.get(name).type)));
+      subset.every((name) => IntegralTypes.some((t) => compareTypes(t, this.types[name])));
     if (!(containsAllFloatingPoint !== containsAllIntegral)) {
       throw new TypeError(
         `sum operation requires dataframe to be entirely of dtype FloatingPoint OR Integral.`);
     }
-    const sums =
-      subset.map((name) => { return (this.get(name) as any).sum(skipNulls, memoryResource); });
-    return Series.new(sums) as any as Series < T[P] extends Integral
-      ? T[P] extends FloatingPoint ? never : Integral
-      : T[P] extends FloatingPoint ? FloatingPoint : never > ;
+
+    const sums = subset.map((name) => (this.get(name) as any).sum(skipNulls, memoryResource));
+
+    return (containsAllIntegral ? Series.new({type: new Int64, data: sums}) : Series.new(sums)) as (
+             Series < T[P] extends Integral ? T[P] extends FloatingPoint ? never : Integral
+                                            : T[P] extends FloatingPoint ? FloatingPoint : never >);
   }
 
   /**
@@ -1785,11 +1880,12 @@ export class DataFrame<T extends TypeMap = any> {
     subset           = (subset == undefined) ? this.names as (keyof T)[] : subset;
     const temp       = new Table({columns: this.select(subset)._accessor.columns});
     const series_map = {} as SeriesMap<T>;
-    this._accessor.names.forEach((name, index) => {
-      if (FloatTypes.some((t) => compareTypes(this.get(name).type, t))) {
-        series_map[name] = Series.new(temp.getColumnByIndex(index).nansToNulls(memoryResource));
+    this.names.forEach((name, index) => {
+      if (FloatTypes.some((t) => compareTypes(this.types[name], t))) {
+        series_map[name] =
+          this.__constructChild(name, temp.getColumnByIndex(index).nansToNulls(memoryResource));
       } else {
-        series_map[name] = Series.new(temp.getColumnByIndex(index));
+        series_map[name] = this.__constructChild(name, temp.getColumnByIndex(index));
       }
     });
     return new DataFrame(series_map);
@@ -1821,9 +1917,9 @@ export class DataFrame<T extends TypeMap = any> {
     return new DataFrame(
       this.names.reduce((map, name) => ({
                           ...map,
-                          [name]: FloatTypes.some((t) => compareTypes(this.get(name).type, t))
+                          [name]: FloatTypes.some((t) => compareTypes(this.types[name], t))
                                     ? Series.new(this._accessor.get(name).isNaN(memoryResource))
-                                    : Series.new(this._accessor.get(name))
+                                    : this.get(name)
                         }),
                         {} as SeriesMap<T>));
   }
@@ -1881,9 +1977,9 @@ export class DataFrame<T extends TypeMap = any> {
     return new DataFrame(
       this.names.reduce((map, name) => ({
                           ...map,
-                          [name]: FloatTypes.some((t) => compareTypes(this.get(name).type, t))
-                                    ? Series.new(this._accessor.get(name).isNotNaN())
-                                    : Series.new(this._accessor.get(name))
+                          [name]: FloatTypes.some((t) => compareTypes(this.types[name], t))
+                                    ? (this.get(name) as Series<FloatingPoint>).isNotNaN()
+                                    : this.get(name)
                         }),
                         {} as SeriesMap<T>));
   }
@@ -1969,22 +2065,17 @@ export class DataFrame<T extends TypeMap = any> {
   replaceNulls<R extends DataType>(value: SeriesMap<T>|R['scalarType'],
                                    memoryResource?: MemoryResource): DataFrame<T> {
     if (value instanceof Object) {
-      const columns = new ColumnAccessor(_seriesToColumns(value));
+      const columns = new DataFrame(_seriesToColumns(value));
       return new DataFrame(this.names.reduce(
         (map, name) => ({
           ...map,
-          [name]: columns.names.includes(name) ? Series.new(this._accessor.get(name).replaceNulls(
-                                                   columns.get(name), memoryResource))
-                                               : Series.new(this._accessor.get(name))
+          [name]: columns.has(name) ? this.get(name).replaceNulls(columns.get(name), memoryResource)
+                                    : this.get(name)
         }),
         {} as SeriesMap<T>));
     } else {
       return new DataFrame(this.names.reduce(
-        (map, name) => ({
-          ...map,
-          [name]: Series.new(this._accessor.get(name).replaceNulls(
-            new Scalar({type: this._accessor.get(name).type, value: value}), memoryResource))
-        }),
+        (map, name) => ({...map, [name]: this.get(name).replaceNulls(value, memoryResource)}),
         {} as SeriesMap<T>));
     }
   }
@@ -2012,7 +2103,7 @@ export class DataFrame<T extends TypeMap = any> {
     const allNames                 = this.names;
 
     subset.forEach((col) => {
-      if (allNames.includes(col)) {
+      if (this.has(col)) {
         column_indices.push(allNames.indexOf(col));
       } else {
         throw new Error(`Unknown column name: ${col}`);
@@ -2020,8 +2111,8 @@ export class DataFrame<T extends TypeMap = any> {
     });
     const table = this.asTable().dropDuplicates(
       column_indices, DuplicateKeepOption[keep], nullsEqual, nullsFirst, memoryResource);
-    return new DataFrame(
-      allNames.reduce((map, name, i) => ({...map, [name]: Series.new(table.getColumnByIndex(i))}),
-                      {} as SeriesMap<T>));
+    return new DataFrame(allNames.reduce(
+      (map, name, i) => ({...map, [name]: this.__constructChild(name, table.getColumnByIndex(i))}),
+      {} as SeriesMap<T>));
   }
 }

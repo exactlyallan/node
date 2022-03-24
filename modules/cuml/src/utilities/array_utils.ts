@@ -1,4 +1,4 @@
-// Copyright (c) 2021, NVIDIA CORPORATION.
+// Copyright (c) 2021-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ import {
   DataFrame,
   Int32,
   Numeric,
+  scope,
   Series,
 } from '@rapidsai/cudf';
 
@@ -29,21 +30,22 @@ export function dataframeToSeries<T extends Numeric, K extends string>(
 }
 
 /**
- * convert a series to a dataframe as per the number of componenet in umapparams
+ * convert a series to a dataframe as per the number of components in umapparams
  * @param input
  * @param n_samples
  * @param nComponents
  * @returns DataFrame
  */
-export function seriesToDataframe<T extends Numeric>(
+export function seriesToDataFrame<T extends Numeric>(
   input: Series<T>, nComponents: number): DataFrame<{[P in number]: T}> {
   const nSamples = Math.floor(input.length / nComponents);
   let result     = new DataFrame<{[P in number]: T}>({});
   for (let i = 0; i < nComponents; i++) {
-    result = result.assign({
-      [i]:
-        input.gather(Series.sequence({type: new Int32, init: i, size: nSamples, step: nComponents}))
-    });
+    result = scope(() => {
+      const indices =
+        Series.sequence({type: new Int32, init: i, size: nSamples, step: nComponents});
+      return result.assign(new DataFrame({[i]: input.gather(indices)}));
+    }, [result]);
   }
   return result;
 }

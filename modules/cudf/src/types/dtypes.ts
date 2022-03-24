@@ -1,4 +1,4 @@
-// Copyright (c) 2021, NVIDIA CORPORATION.
+// Copyright (c) 2021-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,9 @@
 // limitations under the License.
 
 import * as arrow from 'apache-arrow';
+
 import {Column} from '../column';
+import {Table} from '../table';
 import {TypeMap} from './mappings';
 
 export type FloatingPoint = Float32|Float64;
@@ -109,14 +111,12 @@ export interface Utf8String extends arrow.Utf8 {
 export class Utf8String extends arrow.Utf8 {}
 
 export interface List<T extends DataType = any> extends arrow.List<T> {
-  childType: T;
   scalarType: Column<T>;
 }
 export class List<T extends DataType = any> extends arrow.List<T> {}
 
 export interface Struct<T extends TypeMap = any> extends arrow.Struct<T> {
-  childTypes: T;
-  scalarType: {[P in keyof T]: T[P]['scalarType']};
+  scalarType: Table;
 }
 export class Struct<T extends TypeMap = any> extends arrow.Struct<T> {}
 
@@ -145,12 +145,13 @@ export interface TimestampNanosecond extends arrow.TimestampNanosecond {
 }
 export class TimestampNanosecond extends arrow.TimestampNanosecond {}
 
-export interface Categorical<T extends DataType = any> extends arrow.Dictionary<T, Int32> {
+export interface Categorical<T extends DataType = any> extends arrow.Dictionary<T, Uint32> {
   scalarType: T['scalarType'];
 }
-export class Categorical<T extends DataType = any> extends arrow.Dictionary<T, Int32> {
-  constructor(dictionary: T, id?: number|null, isOrdered?: boolean|null) {
-    super(dictionary, new Int32, id, isOrdered);
+export class Categorical<T extends DataType = any> extends arrow.Dictionary<T, Uint32> {
+  constructor(dictionary: T, _id?: number|null, isOrdered?: boolean|null) {
+    // we are overriding the id here so that Arrow dictionaries will always compare
+    super(dictionary, new Uint32, 0, isOrdered);
   }
 }
 

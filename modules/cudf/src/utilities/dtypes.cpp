@@ -1,4 +1,4 @@
-// Copyright (c) 2021, NVIDIA CORPORATION.
+// Copyright (c) 2021-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -124,13 +124,9 @@ cudf::data_type arrow_to_cudf_type(Napi::Object const& type) {
     type.Env(), "Unrecognized Arrow type '" + type.Get("typeId").ToString().Utf8Value() + "");
 }
 
-Napi::Object cudf_to_arrow_type(Napi::Env const& env, cudf::data_type const& cudf_type) {
-  return column_to_arrow_type(env, cudf::column_view{cudf_type, 0, nullptr});
-}
-
-Napi::Object column_to_arrow_type(Napi::Env const& env, cudf::column_view const& column) {
+Napi::Object cudf_scalar_type_to_arrow_type(Napi::Env const& env, cudf::data_type type) {
   auto arrow_type = Napi::Object::New(env);
-  switch (column.type().id()) {
+  switch (type.id()) {
     case cudf::type_id::EMPTY: {
       arrow_type.Set("typeId", 0);
       break;
@@ -224,46 +220,60 @@ Napi::Object column_to_arrow_type(Napi::Env const& env, cudf::column_view const&
     // case cudf::type_id::DURATION_MILLISECONDS: // TODO
     // case cudf::type_id::DURATION_MICROSECONDS: // TODO
     // case cudf::type_id::DURATION_NANOSECONDS: // TODO
-    case cudf::type_id::DICTIONARY32: {
-      arrow_type.Set("typeId", -1);
-      arrow_type.Set("indices", column_to_arrow_type(env, column.child(0)));
-      arrow_type.Set("dictionary", column_to_arrow_type(env, column.child(1)));
-      arrow_type.Set("isOrdered", false);
-      break;
-    }
     case cudf::type_id::STRING: {
       arrow_type.Set("typeId", 5);
       break;
     }
-    case cudf::type_id::LIST: {
-      auto children = Napi::Array::New(env, 1);
-      if (column.num_children() > 1) {
-        auto field = Napi::Object::New(env);
-        field.Set("type", column_to_arrow_type(env, column.child(1)));
-        children.Set(0u, field);
-      }
-      arrow_type.Set("typeId", 12);
-      arrow_type.Set("children", children);
-      break;
-    }
     // case cudf::type_id::DECIMAL32: // TODO
     // case cudf::type_id::DECIMAL64: // TODO
-    case cudf::type_id::STRUCT: {
-      auto children = Napi::Array::New(env, column.num_children());
-      for (cudf::size_type i = 0; i < column.num_children(); ++i) {
-        Napi::HandleScope scope{env};
-        auto field = Napi::Object::New(env);
-        field.Set("type", column_to_arrow_type(env, column.child(i)));
-        children.Set(i, field);
-      }
-      arrow_type.Set("typeId", 13);
-      arrow_type.Set("children", children);
-      break;
-    }
     default:
       throw Napi::Error::New(env,
-                             "column_to_arrow_type not implemented for type: " +
-                               cudf::type_dispatcher(column.type(), cudf::type_to_name{}));
+                             "cudf_scalar_type_to_arrow_type not implemented for type: " +
+                               cudf::type_dispatcher(type, cudf::type_to_name{}));
+  }
+  return arrow_type;
+}
+
+Napi::Object cudf_to_arrow_type(Napi::Env const& env, cudf::data_type const& cudf_type) {
+  return cudf_scalar_type_to_arrow_type(env, cudf_type);
+}
+
+Napi::Object column_to_arrow_type(Napi::Env const& env,
+                                  cudf::data_type const& cudf_type,
+                                  Napi::Array children) {
+  auto arrow_type = Napi::Object::New(env);
+  switch (cudf_type.id()) {
+    case cudf::type_id::DICTIONARY32: {
+      arrow_type.Set("typeId", -1);
+      arrow_type.Set("indices", children.Get(0u).ToObject().Get("type"));
+      arrow_type.Set("dictionary", children.Get(1).ToObject().Get("type"));
+      arrow_type.Set("isOrdered", false);
+      break;
+    }
+    case cudf::type_id::LIST: {
+      auto list_children = Napi::Array::New(env, 1);
+      if (children.Length() > 1) {
+        auto field = Napi::Object::New(env);
+        field.Set("type", children.Get(1).ToObject().Get("type"));
+        list_children.Set(0u, field);
+      }
+      arrow_type.Set("typeId", 12);
+      arrow_type.Set("children", list_children);
+      break;
+    }
+    case cudf::type_id::STRUCT: {
+      auto struct_children = Napi::Array::New(env, children.Length());
+      for (uint32_t i = 0; i < children.Length(); ++i) {
+        Napi::HandleScope scope{env};
+        auto field = Napi::Object::New(env);
+        field.Set("type", children.Get(i).ToObject().Get("type"));
+        struct_children.Set(i, field);
+      }
+      arrow_type.Set("typeId", 13);
+      arrow_type.Set("children", struct_children);
+      break;
+    }
+    default: return cudf_scalar_type_to_arrow_type(env, cudf_type);
   }
   return arrow_type;
 }

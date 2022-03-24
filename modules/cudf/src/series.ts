@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021, NVIDIA CORPORATION.
+// Copyright (c) 2020-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import {
   Int64Buffer,
   Int8Buffer,
   MemoryData,
+  MemoryView,
   Uint16Buffer,
   Uint32Buffer,
   Uint64Buffer,
@@ -31,11 +32,12 @@ import * as arrow from 'apache-arrow';
 import {VectorType} from 'apache-arrow/interfaces';
 import {compareTypes} from 'apache-arrow/visitor/typecomparator';
 
-import {Column, ColumnProps} from './column';
+import {Column} from './column';
 import {fromArrow} from './column/from_arrow';
-import {ColumnAccessor} from './column_accessor';
 import {DataFrame} from './data_frame';
+import {DisplayOptions} from './dataframe/print';
 import {Scalar} from './scalar';
+import {DISPOSER, scope} from './scope';
 import {Table} from './table';
 import {
   Bool8,
@@ -67,7 +69,7 @@ import {
   DuplicateKeepOption,
   NullOrder,
 } from './types/enums';
-import {ArrowToCUDFType, arrowToCUDFType} from './types/mappings';
+import {ArrowToCUDFType, CommonType, findCommonType} from './types/mappings';
 
 export type SeriesProps<T extends DataType = any> = {
   /*
@@ -81,7 +83,7 @@ export type SeriesProps<T extends DataType = any> = {
    *  ```
    */
   type: T;
-  data?: DeviceBuffer | MemoryData | T['scalarType'][] | null;
+  data?: DeviceBuffer | MemoryData | arrow.Vector<T>| T['scalarType'][] | null;
   offset?: number;
   length?: number;
   nullCount?: number;
@@ -98,20 +100,12 @@ export type SeriesProps<T extends DataType = any> = {
    *  ```
    */
   type: T;
-  data?: DeviceBuffer|MemoryData|(T['scalarType'] | null | undefined)[]|null;
+  data?: DeviceBuffer|MemoryData|arrow.Vector<T>|(T['scalarType'] | null | undefined)[]|null;
   offset?: number;
   length?: number;
   nullCount?: number;
   nullMask?: never;
   children?: ReadonlyArray<Series>|null;
-};
-
-export type SequenceOptions<U extends Numeric = any> = {
-  type: U,
-  size: number,
-  init: U['scalarType'],
-  step?: U['scalarType'],
-  memoryResource?: MemoryResource
 };
 
 // clang-format off
@@ -178,8 +172,8 @@ export type Series<T extends arrow.DataType = any> = {
   [arrow.Type.Interval]: never,           // TODO
   [arrow.Type.IntervalDayTime]: never,    // TODO
   [arrow.Type.IntervalYearMonth]: never,  // TODO
-  [arrow.Type.List]: ListSeries<(T extends List ? T['childType'] : any)>,
-  [arrow.Type.Struct]: StructSeries<(T extends Struct ? T['childTypes'] : any)>,
+  [arrow.Type.List]: ListSeries<(T extends List ? T['valueType'] : any)>,
+  [arrow.Type.Struct]: StructSeries<(T extends Struct ? T['dataTypes'] : any)>,
   [arrow.Type.Union]: never,            // TODO
   [arrow.Type.DenseUnion]: never,       // TODO
   [arrow.Type.SparseUnion]: never,      // TODO
@@ -193,29 +187,6 @@ export type Series<T extends arrow.DataType = any> = {
  * One-dimensional GPU array
  */
 export class AbstractSeries<T extends DataType = any> {
-  // clang-format off
-  /* eslint-disable @typescript-eslint/no-unused-vars */
-  _castAsBool8(_memoryResource?: MemoryResource): Series<Bool8> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Bool8 unimplemented`); }
-  _castAsInt8(_memoryResource?: MemoryResource): Series<Int8> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Int8 unimplemented`); }
-  _castAsInt16(_memoryResource?: MemoryResource): Series<Int16> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Int16 unimplemented`); }
-  _castAsInt32(_memoryResource?: MemoryResource): Series<Int32> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Int32 unimplemented`); }
-  _castAsInt64(_memoryResource?: MemoryResource): Series<Int64> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Int64 unimplemented`); }
-  _castAsUint8(_memoryResource?: MemoryResource): Series<Uint8> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Uint8 unimplemented`); }
-  _castAsUint16(_memoryResource?: MemoryResource): Series<Uint16> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Uint16 unimplemented`); }
-  _castAsUint32(_memoryResource?: MemoryResource): Series<Uint32> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Uint32 unimplemented`); }
-  _castAsUint64(_memoryResource?: MemoryResource): Series<Uint64> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Uint64 unimplemented`); }
-  _castAsFloat32(_memoryResource?: MemoryResource): Series<Float32> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Float32 unimplemented`); }
-  _castAsFloat64(_memoryResource?: MemoryResource): Series<Float64> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Float64 unimplemented`); }
-  _castAsString(_memoryResource?: MemoryResource): StringSeries { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to String unimplemented`); }
-  _castAsTimeStampDay(_memoryResource?: MemoryResource): Series<TimestampDay> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampDay unimplemented`); }
-  _castAsTimeStampSecond(_memoryResource?: MemoryResource): Series<TimestampSecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampSecond unimplemented`); }
-  _castAsTimeStampMillisecond(_memoryResource?: MemoryResource): Series<TimestampMillisecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampMillisecond unimplemented`); }
-  _castAsTimeStampMicrosecond(_memoryResource?: MemoryResource): Series<TimestampMicrosecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampMicrosecond unimplemented`); }
-  _castAsTimeStampNanosecond(_memoryResource?: MemoryResource): Series<TimestampNanosecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampNanosecond unimplemented`); }
-  _castAsCategorical<R extends DataType>(_dtype: R, _memoryResource?: MemoryResource): Series<R> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Categorical unimplemented`); }
-  /* eslint-enable @typescript-eslint/no-unused-vars */
-  // clang-format on
-
   /**
    * Create a new cudf.Series from an apache arrow vector
    *
@@ -559,31 +530,46 @@ export class AbstractSeries<T extends DataType = any> {
   }
 
   /**
-   * Casts the values to a new dtype (similar to `static_cast` in C++).
+   * Constructs a Series with a sequence of values.
    *
-   * @param dataType The new dtype.
-   * @param memoryResource The optional MemoryResource used to allocate the result Series's device
-   *   memory.
-   * @returns Series of same size as the current Series containing result of the `cast` operation.
+   * @note If init is omitted, the default is 0.
+   * @note If step is omitted, the default is 1.
+   * @note If type is omitted, the default is Int32.
+   *
+   * @param opts Options for creating the sequence
+   * @returns Series with the sequence
+   *
    * @example
    * ```typescript
-   * import {Series, Bool8, Int32} from '@rapidsai/cudf';
+   * import {Series, Int64, Float32} from '@rapidsai/cudf';
    *
-   * const a = Series.new({type:new Int32, data: [1,0,1,0]});
-   *
-   * a.cast(new Bool8); // Bool8Series [true, false, true, false];
+   * Series.sequence({size: 5}).toArray() // Int32Array[0, 1, 2, 3, 4]
+   * Series.sequence({size: 5, init: 5}).toArray() // Int32Array[5, 6, 7, 8, 9]
+   * Series
+   *   .sequence({ size: 5, init: 0, type: new Int64 })
+   *   .toArray() // BigInt64Array[0n, 1n, 2n, 3n, 4n]
+   * Series
+   *   .sequence({ size: 5, step: 2, init: 1, type: new Float32 })
+   *   .toArray() // Float32Array[1, 3, 5, 7, 9]
    * ```
    */
-  cast<R extends DataType>(dataType: R, memoryResource?: MemoryResource): Series<R> {
-    return new CastVisitor(this, memoryResource).visit(dataType);
+  static sequence<U extends Numeric = Int32>(opts: {
+    size: number;
+    type?: U;  //
+    init?: U['scalarType'];
+    step?: U['scalarType'];
+    memoryResource?: MemoryResource;
+  }): Series<U> {
+    const type = opts.type ?? new Int32;
+    const init = new Scalar({type, value: <any>opts.init ?? 0}) as Scalar<U>;
+    const step = new Scalar({type, value: <any>opts.step ?? 1}) as Scalar<U>;
+    return Series.new(Column.sequence<U>(opts.size, init, step, opts.memoryResource));
   }
 
   /** @ignore */
-  public _col: Column<T>;
+  declare public _col: Column<T>;
 
-  protected constructor(input: AbstractSeries<T>|SeriesProps<T>|Column<T>|arrow.Vector<T>) {
-    this._col = asColumn<T>(input);
-  }
+  protected constructor(col: Column<T>) { DISPOSER.add(this._col = col); }
 
   /**
    * The data type of elements in the underlying data.
@@ -626,6 +612,89 @@ export class AbstractSeries<T extends DataType = any> {
   get numChildren() { return this._col.numChildren; }
 
   /**
+   * Casts the values to a new dtype (similar to `static_cast` in C++).
+   *
+   * @param dataType The new dtype.
+   * @param memoryResource The optional MemoryResource used to allocate the result Series's device
+   *   memory.
+   * @returns Series of same size as the current Series containing result of the `cast` operation.
+   * @example
+   * ```typescript
+   * import {Series, Bool8, Int32} from '@rapidsai/cudf';
+   *
+   * const a = Series.new({type:new Int32, data: [1,0,1,0]});
+   *
+   * a.cast(new Bool8); // Bool8Series [true, false, true, false];
+   * ```
+   */
+  cast<R extends DataType>(dataType: R, memoryResource?: MemoryResource): Series<R> {
+    return new CastVisitor(this, memoryResource).visit(dataType);
+  }
+
+  // clang-format off
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  _castAsBool8(_memoryResource?: MemoryResource): Series<Bool8> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Bool8 unimplemented`); }
+  _castAsInt8(_memoryResource?: MemoryResource): Series<Int8> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Int8 unimplemented`); }
+  _castAsInt16(_memoryResource?: MemoryResource): Series<Int16> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Int16 unimplemented`); }
+  _castAsInt32(_memoryResource?: MemoryResource): Series<Int32> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Int32 unimplemented`); }
+  _castAsInt64(_memoryResource?: MemoryResource): Series<Int64> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Int64 unimplemented`); }
+  _castAsUint8(_memoryResource?: MemoryResource): Series<Uint8> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Uint8 unimplemented`); }
+  _castAsUint16(_memoryResource?: MemoryResource): Series<Uint16> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Uint16 unimplemented`); }
+  _castAsUint32(_memoryResource?: MemoryResource): Series<Uint32> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Uint32 unimplemented`); }
+  _castAsUint64(_memoryResource?: MemoryResource): Series<Uint64> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Uint64 unimplemented`); }
+  _castAsFloat32(_memoryResource?: MemoryResource): Series<Float32> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Float32 unimplemented`); }
+  _castAsFloat64(_memoryResource?: MemoryResource): Series<Float64> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Float64 unimplemented`); }
+  _castAsString(_memoryResource?: MemoryResource): StringSeries { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to String unimplemented`); }
+  _castAsTimeStampDay(_memoryResource?: MemoryResource): Series<TimestampDay> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampDay unimplemented`); }
+  _castAsTimeStampSecond(_memoryResource?: MemoryResource): Series<TimestampSecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampSecond unimplemented`); }
+  _castAsTimeStampMillisecond(_memoryResource?: MemoryResource): Series<TimestampMillisecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampMillisecond unimplemented`); }
+  _castAsTimeStampMicrosecond(_memoryResource?: MemoryResource): Series<TimestampMicrosecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampMicrosecond unimplemented`); }
+  _castAsTimeStampNanosecond(_memoryResource?: MemoryResource): Series<TimestampNanosecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampNanosecond unimplemented`); }
+  /* eslint-enable @typescript-eslint/no-unused-vars */
+  // clang-format on
+
+  _castAsCategorical<R extends Categorical>(type: R, memoryResource?: MemoryResource): Series<R> {
+    const categories = scope(() => {
+      const uniq = scope(() => {
+        return new DataFrame({value: this, order: Series.sequence({size: this.length})})
+          .groupBy({by: 'value'})
+          .nth(0);
+      });
+      return uniq.sortValues({order: {ascending: true}}, memoryResource).get('value');
+    }, [this]);
+
+    const codes = this.encodeLabels(categories, undefined, undefined, memoryResource);
+
+    return Series.new<R>({
+      type,
+      length: codes.length,
+      nullMask: this.mask,
+      children: [codes, categories.cast(type.dictionary)]
+    });
+  }
+
+  /**
+   * Concat a Series to the end of the caller, returning a new Series of a common dtype.
+   *
+   * @param other The Series to concat to the end of the caller.
+   *
+   * @example
+   * ```typescript
+   * import {Series} from '@rapidsai/cudf';
+   *
+   * Series.new([1, 2, 3]).concat(Series.new([4, 5, 6])) // [1, 2, 3, 4, 5, 6]
+   * ```
+   */
+  concat<R extends DataType>(other: Series<R>,
+                             memoryResource?: MemoryResource): Series<CommonType<T, R>> {
+    type U     = typeof type;
+    const type = findCommonType(this.type, other.type);
+    const lhs  = <Column<U>>(compareTypes(type, this.type) ? this._col : this.cast(type)._col);
+    const rhs  = <Column<U>>(compareTypes(type, other.type) ? other._col : other.cast(type)._col);
+    return Series.new(lhs.concat(rhs, memoryResource));
+  }
+
+  /**
    * Return the number of non-null elements in the Series.
    *
    * @returns The number of non-null elements
@@ -652,52 +721,45 @@ export class AbstractSeries<T extends DataType = any> {
    * @param categories The optional Series of values to encode into integers. Defaults to the
    *   unique elements in this Series.
    * @param type The optional integer DataType to use for the returned Series. Defaults to
-   *   Int32.
+   *   Uint32.
    * @param nullSentinel The optional value used to indicate missing category. Defaults to -1.
    * @param memoryResource The optional MemoryResource used to allocate the result Column's
    *   device memory.
    * @returns A sequence of encoded integer labels with values between `0` and `n-1`
    *   categories, and `nullSentinel` for any null values
    */
-  encodeLabels<R extends Integral = Int32>(categories: Series<T>         = this.unique(true),
-                                           type: R                       = new Int32 as R,
-                                           nullSentinel: R['scalarType'] = -1,
-                                           memoryResource?: MemoryResource): Series<R> {
-    try {
-      // If there is a failure casting to the current dtype, catch the exception and return
-      // encoded labels with all values set to `nullSentinel`, since this means the Column
-      // cannot contain any of the encoded categories.
-      categories = categories.cast(this.type);
-    } catch {
-      return Series.sequence(
-        {type, init: nullSentinel, step: 0, memoryResource, size: this.length});
-    }
-    //
-    // 1. Join this Series' values with the `categories` Series to determine the index
-    // positions
-    //    (i.e. `codes`) of the values to keep.
-    // 2. Sort the codes by the original value's position in this Series.
-    // 3. Replace missing codes with `nullSentinel`.
-    //
-    // Note: Written as a single expression so the intermediate memory allocated for the
-    // `join` and `sortValues` calls are GC'd as soon as possible.
-    //
-    return new DataFrame(new ColumnAccessor({
-             value: this._col,
-             order: Series.sequence({type: new Int32, init: 0, step: 1, size: this.length})._col
-           }))
-             .join({
-               on: ['value'],
-               how: 'left',
-               nullEquality: true,
-               other: new DataFrame(new ColumnAccessor({
-                 value: categories._col as Column<T>,
-                 codes: Series.sequence({type, init: 0, step: 1, size: categories.length})._col
-               })),
-             })
-             .sortValues({order: {ascending: true}})
-             .get('codes')
-             .replaceNulls(nullSentinel, memoryResource) as Series<R>;
+  encodeLabels<R extends Integral = Uint32>(categories: Series<T>         = this.unique(true),
+                                            type: R                       = new Uint32 as R,
+                                            nullSentinel: R['scalarType'] = -1,
+                                            memoryResource?: MemoryResource): Series<R> {
+    return scope(() => {
+      try {
+        // If there is a failure casting to the current dtype, catch the exception and return
+        // encoded labels with all values set to `nullSentinel`, since this means the Column
+        // cannot contain any of the encoded categories.
+        if (!compareTypes(this.type, categories.type)) { categories = categories.cast(this.type); }
+      } catch {
+        return Series.sequence(
+          {type, init: nullSentinel, step: 0, memoryResource, size: this.length});
+      }
+
+      // 1. Join this Series' values with the `categories` Series to determine the index
+      // positions (i.e. `codes`) of the values to keep.
+      const codes = scope(() => {
+        const lhs = new DataFrame(
+          {value: this, order: Series.sequence({type: new Uint32, size: this.length})});
+        const rhs = new DataFrame(
+          {value: categories, codes: Series.sequence({type, size: categories.length})});
+        return lhs.join({on: ['value'], how: 'left', nullEquality: true, other: rhs})
+          .drop(['value'])
+          // 2. Sort the codes by the original value's position in this Series.
+          .sortValues({order: {ascending: true}})
+          .get('codes');
+      });
+
+      // 3. Replace missing codes with `nullSentinel`.
+      return codes.replaceNulls(nullSentinel, memoryResource) as Series<R>;
+    }, [this, categories]);
   }
 
   /**
@@ -725,7 +787,7 @@ export class AbstractSeries<T extends DataType = any> {
    */
   fill(value: T['scalarType'], begin = 0, end = this.length, memoryResource?: MemoryResource):
     Series<T> {
-    return Series.new(
+    return this.__construct(
       this._col.fill(new Scalar({type: this.type, value}), begin, end, memoryResource));
   }
 
@@ -799,9 +861,9 @@ export class AbstractSeries<T extends DataType = any> {
 
   replaceNulls(value: any, memoryResource?: MemoryResource): Series<T> {
     if (value instanceof Series) {
-      return Series.new(this._col.replaceNulls(value._col, memoryResource));
+      return this.__construct(this._col.replaceNulls(value._col, memoryResource));
     } else {
-      return Series.new(
+      return this.__construct(
         this._col.replaceNulls(new Scalar({type: this.type, value}), memoryResource));
     }
   }
@@ -826,7 +888,7 @@ export class AbstractSeries<T extends DataType = any> {
    * ```
    */
   replaceNullsFollowing(memoryResource?: MemoryResource): Series<T> {
-    return Series.new(this._col.replaceNulls(true, memoryResource));
+    return this.__construct(this._col.replaceNulls(true, memoryResource));
   }
 
   /**
@@ -849,11 +911,13 @@ export class AbstractSeries<T extends DataType = any> {
    * ```
    */
   replaceNullsPreceding(memoryResource?: MemoryResource): Series<T> {
-    return Series.new(this._col.replaceNulls(false, memoryResource));
+    return this.__construct(this._col.replaceNulls(false, memoryResource));
   }
 
   /**
    * Returns a new series with reversed elements.
+   *
+   * @param memoryResource An optional MemoryResource used to allocate the result's device memory.
    *
    * @example
    * ```typescript
@@ -867,15 +931,30 @@ export class AbstractSeries<T extends DataType = any> {
    * Series.new([false, true]).reverse() // [true, false]
    * ```
    */
-  reverse(): Series<T> {
+  reverse(memoryResource?: MemoryResource): Series<T> {
     return this.gather(
-      Series.sequence({type: new Int32, size: this.length, step: -1, init: this.length - 1}));
+      Series.sequence({size: this.length, step: -1, init: this.length - 1}), false, memoryResource);
   }
 
   /**
-   * Return a sub-selection of this Series using the specified integral indices.
+   * @summary Return sub-selection from a Series using the specified integral indices.
    *
-   * @param selection A Series of 8/16/32-bit signed or unsigned integer indices.
+   * @description Gathers the rows of the source columns according to `selection`, such that row "i"
+   * in the resulting Series's columns will contain row `selection[i]` from the source columns. The
+   * number of rows in the result series will be equal to the number of elements in selection. A
+   * negative value i in the selection is interpreted as i+n, where `n` is the number of rows in
+   * the source series.
+   *
+   * For dictionary columns, the keys column component is copied and not trimmed if the gather
+   * results in abandoned key elements.
+   *
+   * @param indices A Series of 8/16/32-bit signed or unsigned integer indices to gather.
+   * @param nullify_out_of_bounds If `true`, coerce rows that corresponds to out-of-bounds indices
+   *   in the selection to null. If `false`, skips all bounds checking for selection values. Pass
+   *   false if you are certain that the selection contains only valid indices for better
+   *   performance. If `false` and there are out-of-bounds indices in the selection, the behavior
+   *   is undefined. Defaults to `false`.
+   * @param memoryResource An optional MemoryResource used to allocate the result's device memory.
    *
    * @example
    * ```typescript
@@ -891,8 +970,11 @@ export class AbstractSeries<T extends DataType = any> {
    * c.gather(selection) // Bool8Series [true, true]
    * ```
    */
-  gather<R extends IndexType>(selection: Series<R>): Series<T> {
-    return this.__construct(this._col.gather(selection._col));
+  gather(indices: Series<IndexType>|number[],
+         nullify_out_of_bounds = false,
+         memoryResource?: MemoryResource): Series<T> {
+    const map = Array.isArray(indices) ? Series.new(indices).cast(new Uint32) : indices;
+    return this.__construct(this._col.gather(map._col, nullify_out_of_bounds, memoryResource));
   }
 
   /**
@@ -908,7 +990,7 @@ export class AbstractSeries<T extends DataType = any> {
    * ```
    */
   copy(memoryResource?: MemoryResource): Series<T> {
-    return Series.new(this._col.copy(memoryResource));
+    return this.__construct(this._col.copy(memoryResource));
   }
 
   /**
@@ -976,7 +1058,7 @@ export class AbstractSeries<T extends DataType = any> {
     if (n < 0) { throw new Error('Index provided is out of bounds'); }
     const selection = Series.sequence(
       {type: new Int32, size: n < this._col.length ? n : this._col.length, init: 0});
-    return this.__construct(this._col.gather(selection._col));
+    return this.__construct(this._col.gather(selection._col, false));
   }
 
   /**
@@ -1001,7 +1083,7 @@ export class AbstractSeries<T extends DataType = any> {
     const length = n < this._col.length ? n : this._col.length;
     const selection =
       Series.sequence({type: new Int32, size: length, init: this._col.length - length});
-    return this.__construct(this._col.gather(selection._col));
+    return this.__construct(this._col.gather(selection._col, false));
   }
 
   /**
@@ -1027,7 +1109,7 @@ export class AbstractSeries<T extends DataType = any> {
    * ```
    */
   scatter(value: T['scalarType'],
-          indices: Series<Int32>|number[],
+          indices: Series<IndexType>|number[],
           check_bounds?: boolean,
           memoryResource?: MemoryResource): Series<T>;
   /**
@@ -1053,25 +1135,24 @@ export class AbstractSeries<T extends DataType = any> {
    * ```
    */
   scatter(values: Series<T>,
-          indices: Series<Int32>|number[],
+          indices: Series<IndexType>|number[],
           check_bounds?: boolean,
           memoryResource?: MemoryResource): Series<T>;
 
   scatter(source: Series<T>|T['scalarType'],
-          indices: Series<Int32>|number[],
+          indices: Series<IndexType>|number[],
           check_bounds = false,
           memoryResource?: MemoryResource): Series<T> {
-    const dst  = new Table({columns: [this._col]});
-    const inds = indices instanceof Series ? indices : new Series({type: new Int32, data: indices});
+    const dst = new Table({columns: [this._col]});
+    const map = Array.isArray(indices) ? Series.new(indices).cast(new Uint32) : indices;
     if (source instanceof Series) {
-      const src = new Table({columns: [source._col]});
-      const out = dst.scatterTable(src, inds._col, check_bounds, memoryResource);
-      return Series.new(out.getColumnByIndex(0));
-    } else {
-      const src = [new Scalar({type: this.type, value: source})];
-      const out = dst.scatterScalar(src, inds._col, check_bounds, memoryResource);
-      return Series.new(out.getColumnByIndex(0));
+      const src = new Table({columns: [source.cast(this.type)._col]});
+      return this.__construct(
+        dst.scatterTable(src, map._col, check_bounds, memoryResource).getColumnByIndex(0));
     }
+    const src = [new Scalar({type: this.type, value: source})];
+    return this.__construct(
+      dst.scatterScalar(src, map._col, check_bounds, memoryResource).getColumnByIndex(0));
   }
 
   /**
@@ -1079,6 +1160,7 @@ export class AbstractSeries<T extends DataType = any> {
    *
    * @param mask A Series of boolean values for whose corresponding element in this Series
    *   will be selected or ignored.
+   * @param memoryResource An optional MemoryResource used to allocate the result's device memory.
    *
    * @example
    * ```typescript
@@ -1093,7 +1175,9 @@ export class AbstractSeries<T extends DataType = any> {
    * Series.new([false, true, true]).filter(mask) // [false, true]
    * ```
    */
-  filter(mask: Series<Bool8>): Series<T> { return this.__construct(this._col.gather(mask._col)); }
+  filter(mask: Series<Bool8>, memoryResource?: MemoryResource): Series<T> {
+    return this.__construct(this._col.applyBooleanMask(mask._col, memoryResource));
+  }
 
   /**
    * set values at the specified indices
@@ -1124,6 +1208,22 @@ export class AbstractSeries<T extends DataType = any> {
   }
 
   /**
+   * Copy the underlying device memory to host and return an Array (or TypedArray) of the values.
+   * @returns
+   */
+  toArray() { return this.toArrow().toArray(); }
+
+  /**
+   * Return a string with a tabular representation of the Series, pretty-printed according to the
+   * options given.
+   *
+   * @param options
+   */
+  toString(options: DisplayOptions&{name?: string} = {}) {
+    return new DataFrame({[options.name ?? '0']: this}).toString(options);
+  }
+
+  /**
    *
    * @param mask The null-mask. Valid values are marked as 1; otherwise 0. The
    * mask bit given the data index idx is computed as:
@@ -1143,31 +1243,6 @@ export class AbstractSeries<T extends DataType = any> {
   toArrow(): VectorType<T> {
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     return new DataFrame({0: this._col}).toArrow().getChildAt<T>(0)!.chunks[0] as VectorType<T>;
-  }
-
-  /**
-   * Fills a Series with a sequence of values.
-   *
-   * If step is omitted, it takes a value of 1.
-   *
-   * @param opts Options for creating the sequence
-   * @returns Series with the sequence
-   *
-   * @example
-   * ```typescript
-   * import {Series, Int32, Float32} from '@rapidsai/cudf';
-   *
-   * Series.sequence({type: new Int32, size: 5, init: 0}) // [0, 1, 2, 3, 4]
-   * Series.sequence({type: new Float32, size: 5, step: 2, init: 1}) // [1, 3, 5, 7, 9]
-   * ```
-   */
-  public static sequence<U extends Numeric>(opts: SequenceOptions<U>): Series<U> {
-    const init = new Scalar({type: opts.type, value: opts.init});
-    if (opts.step === undefined || opts.step == 1) {
-      return Series.new(Column.sequence<U>(opts.size, init, opts.memoryResource));
-    }
-    const step = new Scalar({type: opts.type, value: opts.step});
-    return Series.new(Column.sequence<U>(opts.size, init, step, opts.memoryResource));
   }
 
   /**
@@ -1211,6 +1286,7 @@ export class AbstractSeries<T extends DataType = any> {
    *   Default: true
    * @param null_order whether nulls should sort before or after other values
    *   Default: before
+   * @param memoryResource An optional MemoryResource used to allocate the result's device memory.
    *
    * @returns Sorted values
    *
@@ -1239,8 +1315,10 @@ export class AbstractSeries<T extends DataType = any> {
    * 20, 10]
    * ```
    */
-  sortValues(ascending = true, null_order: keyof typeof NullOrder = 'after'): Series<T> {
-    return this.gather(this.orderBy(ascending, null_order));
+  sortValues(ascending                          = true,
+             null_order: keyof typeof NullOrder = 'after',
+             memoryResource?: MemoryResource): Series<T> {
+    return this.gather(this.orderBy(ascending, null_order), false, memoryResource);
   }
 
   /**
@@ -1320,7 +1398,9 @@ export class AbstractSeries<T extends DataType = any> {
   /**
    * @summary Hook for specialized Series to override when constructing from a C++ Column.
    */
-  protected __construct(inp: Column<T>): Series<T> { return Series.new(inp); }
+  protected __construct(col: Column<T>): Series<T> {
+    return Series.new(Object.assign(col, {type: transferFields(this.type, col.type)}));
+  }
 
   /**
    * Returns an object with keys "value" and "count" whose respective values are new Series
@@ -1388,7 +1468,7 @@ export class AbstractSeries<T extends DataType = any> {
                  nullsEqual: boolean,
                  nullsFirst: boolean,
                  memoryResource?: MemoryResource) {
-    return Series.new(
+    return this.__construct(
       new Table({columns: [this._col]})
         .dropDuplicates(
           [0], DuplicateKeepOption[keep ? 'first' : 'none'], nullsEqual, nullsFirst, memoryResource)
@@ -1398,13 +1478,6 @@ export class AbstractSeries<T extends DataType = any> {
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const Series = AbstractSeries;
-
-Object.defineProperty(Series.prototype, '__construct', {
-  writable: false,
-  enumerable: false,
-  configurable: true,
-  value: (Series.prototype as any).__construct,
-});
 
 import {Bool8Series} from './series/bool';
 import {CategoricalSeries} from './series/categorical';
@@ -1509,6 +1582,34 @@ function inferType(value: any[]): DataType {
     'Unable to infer Series type from input values, explicit type declaration expected');
 }
 
+const arrayToDtype = (value: any[]|MemoryView|ArrayBufferView) => {
+  switch (value.constructor) {
+    case Int8Array: return new Int8;
+    case Int8Buffer: return new Int8;
+    case Int16Array: return new Int16;
+    case Int16Buffer: return new Int16;
+    case Int32Array: return new Int32;
+    case Int32Buffer: return new Int32;
+    case BigInt64Array: return new Int64;
+    case Int64Buffer: return new Int64;
+    case Uint8Array: return new Uint8;
+    case Uint8Buffer: return new Uint8;
+    case Uint8ClampedArray: return new Uint8;
+    case Uint8ClampedBuffer: return new Uint8;
+    case Uint16Array: return new Uint16;
+    case Uint16Buffer: return new Uint16;
+    case Uint32Array: return new Uint32;
+    case Uint32Buffer: return new Uint32;
+    case BigUint64Array: return new Uint64;
+    case Uint64Buffer: return new Uint64;
+    case Float32Array: return new Float32;
+    case Float32Buffer: return new Float32;
+    case Float64Array: return new Float64;
+    case Float64Buffer: return new Float64;
+    default: return inferType(value as any[]);
+  }
+};
+
 function asColumn(value: Int8Array|Int8Buffer): Column<Int8>;
 function asColumn(value: Int16Array|Int16Buffer): Column<Int16>;
 function asColumn(value: Int32Array|Int32Buffer): Column<Int32>;
@@ -1535,55 +1636,60 @@ function asColumn<T extends DataType>(value: AbstractSeries<T>|SeriesProps<T>  /
                                       |(Date | null | undefined)[][]): Column<T>;
 
 function asColumn<T extends DataType>(value: any) {
+  if (!value) { value = []; }
+
+  // Return early if it's already a Series
   if (value instanceof AbstractSeries) { return value._col; }
-  if (Array.isArray(value)) {
-    return fromArrow(arrow.Vector.from(
-             {type: inferType(value), values: value as any, highWaterMark: Infinity})) as any;
+
+  // Return early if it's already a Column
+  if (value instanceof Column) { return value as Column<T>; }
+
+  // If Array/Vector/TypedArray/MemoryView, wrap in a ColumnProps
+  if (value instanceof arrow.Vector) {
+    value = {data: value};
+  } else if (Array.isArray(value) ||       //
+             ArrayBuffer.isView(value) ||  //
+             value instanceof MemoryView) {
+    value = {data: value, type: arrayToDtype(value)};
   }
 
-  if (value instanceof Int8Array || value instanceof Int8Buffer) {
-    return new Column({type: new Int8, data: value, length: value.length});
-  } else if (value instanceof Int16Array || value instanceof Int16Buffer) {
-    return new Column({type: new Int16, data: value, length: value.length});
-  } else if (value instanceof Int32Array || value instanceof Int32Buffer) {
-    return new Column({type: new Int32, data: value, length: value.length});
-  } else if (value instanceof BigInt64Array || value instanceof Int64Buffer) {
-    return new Column({type: new Int64, data: value, length: value.length});
-  } else if (value instanceof Uint8Array || value instanceof Uint8Buffer) {
-    return new Column({type: new Uint8, data: value, length: value.length});
-  } else if (value instanceof Uint8ClampedArray || value instanceof Uint8ClampedBuffer) {
-    return new Column({type: new Uint8, data: value, length: value.length});
-  } else if (value instanceof Uint16Array || value instanceof Uint16Buffer) {
-    return new Column({type: new Uint16, data: value, length: value.length});
-  } else if (value instanceof Uint32Array || value instanceof Uint32Buffer) {
-    return new Column({type: new Uint32, data: value, length: value.length});
-  } else if (value instanceof BigUint64Array || value instanceof Uint64Buffer) {
-    return new Column({type: new Uint64, data: value, length: value.length});
-  } else if (value instanceof Float32Array || value instanceof Float32Buffer) {
-    return new Column({type: new Float32, data: value, length: value.length});
-  } else if (value instanceof Float64Array || value instanceof Float64Buffer) {
-    return new Column({type: new Float64, data: value, length: value.length});
-  }
+  let {data, offset} = value;
 
-  if (value instanceof arrow.Vector) { return fromArrow(value) as any; }
-  if (!value.type && Array.isArray(value.data)) {
-    return fromArrow(arrow.Vector.from(
-             {type: inferType(value.data), values: value.data, highWaterMark: Infinity})) as any;
-  }
-  if (!(value.type instanceof arrow.DataType)) { value.type = arrowToCUDFType<T>(value.type); }
-  if (Array.isArray(value.data)) {
-    return fromArrow(arrow.Vector.from(
-             {type: value.type, values: value.data, highWaterMark: Infinity})) as any;
-  }
-  if (value instanceof Column) {
-    return value;
+  if (typeof data !== 'object') {
+    data = undefined;
   } else {
-    const props: ColumnProps<T> = {...value};
-    if (value.children != null) {
-      props.children = value.children.map((item: Series) => item._col);
+    // Use C++ Arrow-to-cuDF conversion if `data` is an Arrow Vector
+    if (data instanceof arrow.Vector) {
+      // Slice `offset` before converting it to a Column
+      return fromArrow<T>(typeof offset !== 'number' ? data : data.slice(offset));
     }
-    return new Column(props);
+
+    // If `data` is an Array, convert it to a Vector and use C++ Arrow-to-cuDF conversion
+    if (Array.isArray(data)) {
+      return fromArrow<T>(arrow.Vector.from({
+        highWaterMark: Infinity,
+        type: value.type ?? inferType(data),
+        // Slice `offset` from the Array before converting so
+        // we don't write unnecessary values with the Arrow builders.
+        values: typeof offset !== 'number' ? data : data.slice(offset)
+      }));
+    }
+
+    // If `data.buffer` is a ArrayBuffer, copy it to a DeviceBuffer
+    if (ArrayBuffer.isView(value) || (data.buffer instanceof ArrayBuffer)) {
+      if (typeof data.length === 'number') { value.length = data.length; }
+      data   = new DeviceBuffer(typeof offset !== 'number' ? data : data.subarray(offset));
+      offset = 0;
+    }
+    // If `data.buffer` is a DeviceBuffer, propagate its `byteOffset` to ColumnProps
+    else if (data.buffer instanceof DeviceBuffer) {
+      if (typeof data.length === 'number') { value.length = data.length; }
+      offset =
+        (typeof offset !== 'number' ? 0 : offset) + (data.byteOffset / data.BYTES_PER_ELEMENT);
+    }
   }
+
+  return new Column<T>({...value, data, offset, children: value.children?.map(asColumn)});
 }
 
 const columnToSeries = (() => {
@@ -1592,57 +1698,116 @@ const columnToSeries = (() => {
     visitMany<T extends DataType>(columns: Column<T>[]): Series<T>[];
     getVisitFn<T extends DataType>(column: Column<T>): (column: Column<T>) => Series<T>;
   }
-  // clang-format off
   /* eslint-disable @typescript-eslint/no-unused-vars */
   class ColumnToSeriesVisitor extends arrow.Visitor {
-    getVisitFn<T extends DataType>(column: Column<T>): (column: Column<T>) => Series<T> {
-      if (!(column.type instanceof arrow.DataType)) {
-        return super.getVisitFn({
-          ...(column.type as any),
-          __proto__: arrow.DataType.prototype
-        });
+    public visit<T extends DataType>(col: Column<T>): Series<T> {
+      for (let i = -1, n = col.numChildren; ++i < n;) {
+        // Visit each child to ensure concrete dtypes
+        this.visit(col.getChild(i));
       }
-      return super.getVisitFn(column.type);
+      return super.visit(col);
     }
-    // public visitNull                 <T extends Null>(col: Column<T>) { return new (NullSeries as any)(col); }
-    public visitBool                 <T extends Bool8>(col: Column<T>) { return new (Bool8Series as any)(col); }
-    public visitInt8                 <T extends Int8>(col: Column<T>) { return new (Int8Series as any)(col); }
-    public visitInt16                <T extends Int16>(col: Column<T>) { return new (Int16Series as any)(col); }
-    public visitInt32                <T extends Int32>(col: Column<T>) { return new (Int32Series as any)(col); }
-    public visitInt64                <T extends Int64>(col: Column<T>) { return new (Int64Series as any)(col); }
-    public visitUint8                <T extends Uint8>(col: Column<T>) { return new (Uint8Series as any)(col); }
-    public visitUint16               <T extends Uint16>(col: Column<T>) { return new (Uint16Series as any)(col); }
-    public visitUint32               <T extends Uint32>(col: Column<T>) { return new (Uint32Series as any)(col); }
-    public visitUint64               <T extends Uint64>(col: Column<T>) { return new (Uint64Series as any)(col); }
-    // public visitFloat16              <T extends Float16>(_: T) { return new (Float16Series as any)(_); }
-    public visitFloat32              <T extends Float32>(col: Column<T>) { return new (Float32Series as any)(col); }
-    public visitFloat64              <T extends Float64>(col: Column<T>) { return new (Float64Series as any)(col); }
-    public visitUtf8                 <T extends Utf8String>(col: Column<T>) { return new (StringSeries as any)(col); }
+    public getVisitFn<T extends DataType>(column: Column<T>): (column: Column<T>) => Series<T> {
+      let {type} = column;
+      if (!(type instanceof arrow.DataType)) {
+        type = {...(<any>type), __proto__: arrow.DataType.prototype};
+      }
+      return super.getVisitFn(type);
+    }
+    public visitBool<T extends Bool8>(col: Column<T>) {
+      return new (<any>Bool8Series)(Object.assign(col, {type: new Bool8}));
+    }
+    public visitInt8<T extends Int8>(col: Column<T>) {
+      return new (<any>Int8Series)(Object.assign(col, {type: new Int8}));
+    }
+    public visitInt16<T extends Int16>(col: Column<T>) {
+      return new (<any>Int16Series)(Object.assign(col, {type: new Int16}));
+    }
+    public visitInt32<T extends Int32>(col: Column<T>) {
+      return new (<any>Int32Series)(Object.assign(col, {type: new Int32}));
+    }
+    public visitInt64<T extends Int64>(col: Column<T>) {
+      return new (<any>Int64Series)(Object.assign(col, {type: new Int64}));
+    }
+    public visitUint8<T extends Uint8>(col: Column<T>) {
+      return new (<any>Uint8Series)(Object.assign(col, {type: new Uint8}));
+    }
+    public visitUint16<T extends Uint16>(col: Column<T>) {
+      return new (<any>Uint16Series)(Object.assign(col, {type: new Uint16}));
+    }
+    public visitUint32<T extends Uint32>(col: Column<T>) {
+      return new (<any>Uint32Series)(Object.assign(col, {type: new Uint32}));
+    }
+    public visitUint64<T extends Uint64>(col: Column<T>) {
+      return new (<any>Uint64Series)(Object.assign(col, {type: new Uint64}));
+    }
+    public visitFloat32<T extends Float32>(col: Column<T>) {
+      return new (<any>Float32Series)(Object.assign(col, {type: new Float32}));
+    }
+    public visitFloat64<T extends Float64>(col: Column<T>) {
+      return new (<any>Float64Series)(Object.assign(col, {type: new Float64}));
+    }
+    public visitUtf8<T extends Utf8String>(col: Column<T>) {
+      return new (<any>StringSeries)(Object.assign(col, {type: new Utf8String}));
+    }
+    public visitDateDay<T extends TimestampDay>(col: Column<T>) {
+      return new (<any>TimestampDaySeries)(Object.assign(col, {type: new TimestampDay}));
+    }
+    public visitDateMillisecond<T extends TimestampMillisecond>(col: Column<T>) {
+      return new (<any>TimestampMillisecondSeries)(
+        Object.assign(col, {type: new TimestampMillisecond}));
+    }
+    public visitTimestampSecond<T extends TimestampSecond>(col: Column<T>) {
+      return new (<any>TimestampSecondSeries)(Object.assign(col, {type: new TimestampSecond}));
+    }
+    public visitTimestampMillisecond<T extends TimestampMillisecond>(col: Column<T>) {
+      return new (<any>TimestampMillisecondSeries)(
+        Object.assign(col, {type: new TimestampMillisecond}));
+    }
+    public visitTimestampMicrosecond<T extends TimestampMicrosecond>(col: Column<T>) {
+      return new (<any>TimestampMicrosecondSeries)(
+        Object.assign(col, {type: new TimestampMicrosecond}));
+    }
+    public visitTimestampNanosecond<T extends TimestampNanosecond>(col: Column<T>) {
+      return new (<any>TimestampNanosecondSeries)(
+        Object.assign(col, {type: new TimestampNanosecond}));
+    }
+    public visitList<T extends List>(col: Column<T>) {
+      const {type, nullable} = col.getChild(1);  // elements
+      const {name, metadata} = col.type.children[0];
+      const childField       = arrow.Field.new({name, type, nullable, metadata});
+      return new (<any>ListSeries)(Object.assign(col, {type: new List(childField)}));
+    }
+    public visitStruct<T extends Struct>(col: Column<T>) {
+      const childFields = col.type.children.map(({name, metadata}, i) => {
+        const {type, nullable} = col.getChild(i);
+        return arrow.Field.new({name, type, nullable, metadata});
+      });
+      return new (<any>StructSeries)(Object.assign(col, {type: new Struct(childFields)}));
+    }
+    public visitDictionary<T extends Categorical>(col: Column<T>) {
+      const {id, isOrdered}    = col.type;
+      const {type: dictionary} = col.getChild(1);  // categories
+      return new (<any>CategoricalSeries)(
+        Object.assign(col, {type: new Categorical(dictionary, id, isOrdered)}));
+    }
+    // clang-format off
     // public visitBinary               <T extends Binary>(col: Column<T>) { return new (BinarySeries as any)(col); }
     // public visitFixedSizeBinary      <T extends FixedSizeBinary>(col: Column<T>) { return new (FixedSizeBinarySeries as any)(col); }
-    public visitDateDay              <T extends TimestampDay>(col: Column<T>) { return new (TimestampDaySeries as any)(col); }
-    public visitDateMillisecond      <T extends TimestampMillisecond>(col: Column<T>) { return new (TimestampMillisecondSeries as any)(col); }
-    public visitTimestampSecond      <T extends TimestampSecond>(col: Column<T>) { return new (TimestampSecondSeries as any)(col); }
-    public visitTimestampMillisecond <T extends TimestampMillisecond>(col: Column<T>) { return new (TimestampMillisecondSeries as any)(col); }
-    public visitTimestampMicrosecond <T extends TimestampMicrosecond>(col: Column<T>) { return new (TimestampMicrosecondSeries as any)(col); }
-    public visitTimestampNanosecond  <T extends TimestampNanosecond>(col: Column<T>) { return new (TimestampNanosecondSeries as any)(col); }
     // public visitTimeSecond           <T extends TimeSecond>(col: Column<T>) { return new (TimeSecondSeries as any)(col); }
     // public visitTimeMillisecond      <T extends TimeMillisecond>(col: Column<T>) { return new (TimeMillisecondSeries as any)(col); }
     // public visitTimeMicrosecond      <T extends TimeMicrosecond>(col: Column<T>) { return new (TimeMicrosecondSeries as any)(col); }
     // public visitTimeNanosecond       <T extends TimeNanosecond>(col: Column<T>) { return new (TimeNanosecondSeries as any)(col); }
     // public visitDecimal              <T extends Decimal>(col: Column<T>) { return new (DecimalSeries as any)(col); }
-    public visitList                 <T extends List>(col: Column<T>) { return new (ListSeries as any)(col); }
-    public visitStruct               <T extends Struct>(col: Column<T>) { return new (StructSeries as any)(col); }
     // public visitDenseUnion           <T extends DenseUnion>(col: Column<T>) { return new (DenseUnionSeries as any)(col); }
     // public visitSparseUnion          <T extends SparseUnion>(col: Column<T>) { return new (SparseUnionSeries as any)(col); }
-    public visitDictionary           <T extends Categorical>(col: Column<T>) { return new (CategoricalSeries as any)(col); }
     // public visitIntervalDayTime      <T extends IntervalDayTime>(col: Column<T>) { return new (IntervalDayTimeSeries as any)(col); }
     // public visitIntervalYearMonth    <T extends IntervalYearMonth>(col: Column<T>) { return new (IntervalYearMonthSeries as any)(col); }
     // public visitFixedSizeList        <T extends FixedSizeList>(col: Column<T>) { return new (FixedSizeListSeries as any)(col); }
     // public visitMap                  <T extends Map>(col: Column<T>) { return new (MapSeries as any)(col); }
+    // clang-format on
   }
   /* eslint-enable @typescript-eslint/no-unused-vars */
-  // clang-format on
   const visitor = new ColumnToSeriesVisitor();
   return function columnToSeries<T extends DataType>(column: Column<T>) {
     return visitor.visit(column);
@@ -1660,4 +1825,20 @@ function _nLargestOrSmallest<T extends DataType>(
   } else {
     throw new TypeError('keep must be either "first" or "last"');
   }
+}
+
+function transferFields<T extends DataType>(lhs: T, rhs: T) {
+  const {children: lhsFields} = lhs;
+  const {children: rhsFields} = rhs;
+  if (lhsFields && rhsFields && lhsFields.length && rhsFields.length) {
+    lhsFields.forEach(({name, type, nullable, metadata}, i) => {
+      rhsFields[i] = arrow.Field.new({
+        name,
+        nullable,
+        metadata,
+        type: transferFields(type, rhsFields[i].type),
+      });
+    });
+  }
+  return rhs;
 }

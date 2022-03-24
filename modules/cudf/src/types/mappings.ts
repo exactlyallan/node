@@ -1,4 +1,4 @@
-// Copyright (c) 2021, NVIDIA CORPORATION.
+// Copyright (c) 2021-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 import * as arrow from 'apache-arrow';
 import {compareTypes} from 'apache-arrow/visitor/typecomparator';
 
-import CUDF from '../addon';
+import * as CUDF from '../addon';
 import {Column} from '../column';
 
 import {
@@ -56,7 +56,7 @@ export type TypeMap = {
   [key: string]: DataType
 };
 
-export type ColumnsMap<T extends TypeMap> = {
+export type ColumnsMap<T extends TypeMap = any> = {
   [P in keyof T]: Column<T[P]>
 };
 
@@ -78,8 +78,7 @@ type CommonType_Float64<T extends Numeric> =
 
 // clang-format off
 export type CommonType<T extends DataType, R extends DataType> =
-  T extends R
-    ? R extends T ? T : R :
+  T extends R ? R extends T ? T : R :
   R extends Numeric
     ? T extends Bool8   ? CommonType_Bool8<R>
     : T extends Int8    ? CommonType_Int8<R>
@@ -92,8 +91,11 @@ export type CommonType<T extends DataType, R extends DataType> =
     : T extends Uint64  ? CommonType_Uint64<R>
     : T extends Float32 ? CommonType_Float32<R>
     : T extends Float64 ? CommonType_Float64<R>
-    : never
-  : never;
+    : never :
+  T extends List ? R extends List ? List<CommonType<T['valueType'], R['valueType']>> : never :
+  T extends Struct ? R extends Struct ? Struct<CommonTypes<T['dataTypes'], R['dataTypes']>> : never :
+  T extends Categorical ? R extends Categorical ? Categorical<CommonType<T['dictionary'], R['dictionary']>> : never :
+  never;
 
 export type CommonTypes<T extends TypeMap, R extends TypeMap> =
   {
@@ -111,7 +113,12 @@ export type CommonTypes<T extends TypeMap, R extends TypeMap> =
 
 export function findCommonType<T extends DataType, R extends DataType>(lhs: T,
                                                                        rhs: R): CommonType<T, R> {
-  if (compareTypes(lhs, rhs)) { return arrowToCUDFType(lhs) as CommonType<T, R>; }
+  if (compareTypes(lhs, rhs)) {
+    if (!(rhs instanceof arrow.DataType)) {  //
+      return arrowToCUDFType(rhs as any) as CommonType<T, R>;
+    }
+    return rhs as unknown as CommonType<T, R>;
+  }
   return arrowToCUDFType(CUDF.findCommonType(lhs, rhs)) as CommonType<T, R>;
 }
 
@@ -175,10 +182,7 @@ export const arrowToCUDFType = (() => {
   class ArrowToCUDFTypeVisitor extends arrow.Visitor {
     getVisitFn<T extends arrow.DataType>(type: T): (type: T) => ArrowToCUDFType<T> {
       if (!(type instanceof arrow.DataType)) {
-        return super.getVisitFn({
-          ...(type as any),
-          __proto__: arrow.DataType.prototype
-        });
+        type = {...(<any>type), __proto__: arrow.DataType.prototype};
       }
       return super.getVisitFn(type);
     }
@@ -221,7 +225,7 @@ export const arrowToCUDFType = (() => {
     // public visitDenseUnion           <T extends arrow.DenseUnion>(type: T) { return new DenseUnion(type); }
     // public visitSparseUnion          <T extends arrow.SparseUnion>(type: T) { return new SparseUnion(type); }
     public visitDictionary           <T extends arrow.Dictionary>({dictionary, id, isOrdered}: T) {
-      return new Categorical(dictionary, id, isOrdered);
+      return new Categorical(this.visit(dictionary), id, isOrdered);
     }
     // public visitIntervalDayTime      <T extends arrow.IntervalDayTime>(type: T) { return new IntervalDayTime; }
     // public visitIntervalYearMonth    <T extends arrow.IntervalYearMonth>(type: T) { return new IntervalYearMonth; }

@@ -1,6 +1,6 @@
-#!/usr/bin/env -S node -r esm
+#!/usr/bin/env node
 
-// Copyright (c) 2021, NVIDIA CORPORATION.
+// Copyright (c) 2021-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -70,6 +70,10 @@ fastify.register((require('fastify-arrow')))
         arrowTable.schema.metadata.set('queryTime', queryTime);
         arrowTable.schema.metadata.set('queryResults', resultCount);
         RecordBatchStreamWriter.writeAll(arrowTable).pipe(reply.stream());
+
+        // TODO: remove these calls to dispose once scope() supports async
+        results.dispose();
+        dfs.forEach((df) => df.dispose());
       } catch (err) {
         request.log.error({err}, '/run_query error');
         reply.code(500).send(err);
@@ -89,7 +93,13 @@ function head(dfs, rows) {
   for (let i = 0; i < dfs.length; ++i) {
     if (dfs[i].numRows == 0) continue;
     rowCount += dfs[i].numRows;
-    if (result.numRows <= rows) { result = result.concat(dfs[i].head(rows - result.numRows)); }
+    if (result.numRows <= rows) {
+      const head = dfs[i].head(rows - result.numRows);
+      result     = result.concat(head);
+
+      // TODO: remove this call to dispose once scope() supports async
+      head.dispose();
+    }
   }
 
   return {results: result, resultCount: rowCount};

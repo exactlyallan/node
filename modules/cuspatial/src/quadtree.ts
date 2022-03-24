@@ -1,4 +1,4 @@
-// Copyright (c) 2021, NVIDIA CORPORATION.
+// Copyright (c) 2021-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,7 +33,6 @@ import {
 } from './addon';
 import {
   BoundingBoxes,
-  Coords,
   polygonBoundingBoxes,
   Polygons,
   polylineBoundingBoxes,
@@ -83,7 +82,7 @@ export class Quadtree<T extends FloatingPoint> {
    * @param options.memoryResource Optional resource to use for output device memory allocations.
    * @returns Quadtree
    */
-  static new<T extends Coords>(options: {
+  static new<T extends Series<FloatingPoint>>(options: {
     x: T,
     y: T,
     xMin: number,
@@ -231,18 +230,18 @@ export class Quadtree<T extends FloatingPoint> {
   /**
    * @summary Point x-coordinates in the sorted order they appear in the Quadtree.
    */
-  public get pointX(): Series<T> { return Series.new(this._x.gather(this._keyMap)); }
+  public get pointX(): Series<T> { return Series.new(this._x.gather(this._keyMap, false)); }
 
   /**
    * @summary Point y-coordinates in the sorted order they appear in the Quadtree.
    */
-  public get pointY(): Series<T> { return Series.new(this._y.gather(this._keyMap)); }
+  public get pointY(): Series<T> { return Series.new(this._y.gather(this._keyMap, false)); }
 
   /**
    * @summary Point x and y-coordinates in the sorted order they appear in the Quadtree.
    */
   public get points() {
-    const remap = new Table({columns: [this._x, this._y]}).gather(this._keyMap);
+    const remap = new Table({columns: [this._x, this._y]}).gather(this._keyMap, false);
     return new DataFrame({
       x: remap.getColumnByIndex<T>(0),
       y: remap.getColumnByIndex<T>(1),

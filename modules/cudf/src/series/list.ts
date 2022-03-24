@@ -1,4 +1,4 @@
-// Copyright (c) 2021, NVIDIA CORPORATION.
+// Copyright (c) 2021-2022, NVIDIA CORPORATION.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,10 +13,9 @@
 // limitations under the License.
 
 import {MemoryResource} from '@rapidsai/rmm';
-import * as arrow from 'apache-arrow';
 
-import {Column} from '../column';
 import {Series} from '../series';
+import {Table} from '../table';
 import {DataType, Int32, List} from '../types/dtypes';
 
 /**
@@ -62,15 +61,6 @@ export class ListSeries<T extends DataType> extends Series<List<T>> {
   get elements(): Series<T> { return Series.new(this._col.getChild<T>(1)); }
 
   /**
-   * Concat a ListSeries to the end of the caller, returning a new ListSeries.
-   *
-   * @param other The ListSeries to concat to the end of the caller.
-   */
-  concat(other: Series<List<T>>, memoryResource?: MemoryResource): Series<List<T>> {
-    return this.__construct(this._col.concat(other._col, memoryResource));
-  }
-
-  /**
    * Return a value at the specified index to host memory
    *
    * @param index the index in this Series to return a value for
@@ -94,24 +84,20 @@ export class ListSeries<T extends DataType> extends Series<List<T>> {
     return value === null ? null : Series.new(value);
   }
 
-  /** @ignore */
-  protected __construct(col: Column<List<T>>) {
-    return new ListSeries(Object.assign(col, {type: fixNames(this.type, col.type)}));
+  /**
+   * @summary Flatten the list elements.
+   */
+  flatten(memoryResource?: MemoryResource): Series<T> {
+    return Series.new<T>(
+      new Table({columns: [this._col]}).explode(0, memoryResource).getColumnByIndex(0));
   }
-}
 
-Object.defineProperty(ListSeries.prototype, '__construct', {
-  writable: false,
-  enumerable: false,
-  configurable: true,
-  value: (ListSeries.prototype as any).__construct,
-});
-
-function fixNames<T extends DataType>(lhs: T, rhs: T) {
-  if (lhs.children && rhs.children && lhs.children.length && rhs.children.length) {
-    lhs.children.forEach(({name, type}, idx) => {
-      rhs.children[idx] = arrow.Field.new({name, type: fixNames(type, rhs.children[idx].type)});
-    });
+  /**
+   * @summary Flatten the list elements and return a Series of each element's position in
+   * its original list.
+   */
+  flattenIndices(memoryResource?: MemoryResource): Series<Int32> {
+    return Series.new<Int32>(
+      new Table({columns: [this._col]}).explodePosition(0, memoryResource).getColumnByIndex(0));
   }
-  return rhs;
 }

@@ -33,6 +33,10 @@
             "path": "modules/cuspatial"
         },
         {
+            "name": "io",
+            "path": "modules/io"
+        },
+        {
             "name": "sql",
             "path": "modules/sql"
         },
@@ -110,7 +114,8 @@
             "./node-rapids/modules/demo",
             "./node-rapids/modules/glfw",
             "./node-rapids/modules/webgl",
-            "./node-rapids/modules/sql"
+            "./node-rapids/modules/sql",
+            "./node-rapids/modules/io"
         ],
         "eslint.options": {
             "configFile": ".eslintrc.js"
@@ -133,6 +138,12 @@
             "editor.defaultFormatter": "xaver.clang-format"
         },
         "[cuda]": {
+            "editor.tabSize": 2,
+            "editor.formatOnSave": true,
+            "editor.formatOnSaveMode": "file",
+            "editor.defaultFormatter": "xaver.clang-format"
+        },
+        "[cuda-cpp]": {
             "editor.tabSize": 2,
             "editor.formatOnSave": true,
             "editor.formatOnSaveMode": "file",
@@ -169,7 +180,6 @@
             "editor.defaultFormatter": "vscode.typescript-language-features"
         },
         "clangd.path": "/usr/bin/clangd",
-        "clangd.semanticHighlighting": false,
         "clangd.arguments": [
             "--log=info",
             "--pch-storage=disk",
@@ -192,9 +202,10 @@
         "files.insertFinalNewline": true,
         "files.trimTrailingWhitespace": true,
         "files.associations": {
-            "*.cu": "cuda",
-            "*.cuh": "cuda",
-            "*.glsl.js": "glsl"
+            "*.cu": "cuda-cpp",
+            "*.cuh": "cuda-cpp",
+            "*.glsl.js": "glsl",
+            "*.glsl.ts": "glsl"
         },
         "files.exclude": {
             "**/.git": true,
