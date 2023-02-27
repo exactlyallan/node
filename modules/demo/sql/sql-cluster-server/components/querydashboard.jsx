@@ -13,10 +13,10 @@
 // limitations under the License.
 
 import Button from '@material-ui/core/Button';
-import React from 'react';
+import * as React from 'react';
 import { Col, Container, FormControl, InputGroup, Row } from 'react-bootstrap';
 import { QueryBuilder } from './querybuilder';
-import { Table } from 'apache-arrow';
+import { tableFromIPC } from 'apache-arrow';
 import Paper from '@material-ui/core/Paper';
 import MatTable from '@material-ui/core/Table';
 import TableBody from '@material-ui/core/TableBody';
@@ -37,6 +37,10 @@ const columns = [
   { id: 'text', label: 'Text', minWidth: 500 }
 ];
 
+/**
+ *
+ * @param {import('apache-arrow').Table} table
+ */
 function formatData(table) {
   let rows = [];
   if (table.length == 0) {
@@ -44,19 +48,19 @@ function formatData(table) {
   }
 
   const resultsToDisplay = table.length < MAX_RESULTS_TO_DISPLAY ? table.length : MAX_RESULTS_TO_DISPLAY;
-  const ids = [...table.getColumn("id")].map((x) => +x).slice(0, resultsToDisplay);
-  const revids = [...table.getColumn("revid")].map((x) => +x).slice(0, resultsToDisplay);
-  const urls = [...table.getColumn("url")].slice(0, resultsToDisplay);
-  const titles = [...table.getColumn("title")].slice(0, resultsToDisplay);
-  const texts = [...table.getColumn("text")].slice(0, resultsToDisplay);
+  const ids = [...table.getChild("id") || []].map(Number).slice(0, resultsToDisplay);
+  const revids = [...table.getChild("revid") || []].map(Number).slice(0, resultsToDisplay);
+  const urls = [...table.getChild("url") || []].slice(0, resultsToDisplay);
+  const titles = [...table.getChild("title") || []].slice(0, resultsToDisplay);
+  const texts = [...table.getChild("text") || []].slice(0, resultsToDisplay);
 
   for (let i = 0; i < resultsToDisplay; ++i) {
     rows.push({
-      id: ids[i],
-      revid: revids[i],
-      url: urls[i],
-      title: titles[i],
-      text: texts[i]
+      id: ids[i] || '',
+      revid: revids[i] || '',
+      url: urls[i] || '',
+      title: titles[i] || '',
+      text: texts[i] || '',
     });
   }
 
@@ -92,7 +96,7 @@ export class QueryDashboard extends React.Component {
           'accepts': `application/octet-stream`
         },
         body: `${this.state.query}`
-      }).then((res) => Table.from(res)).then((table) => {
+      }).then((res) => tableFromIPC(res)).then((table) => {
         this.setState({
           queryResult: formatData(table),
           queryTime: table.schema.metadata.get('queryTime'),

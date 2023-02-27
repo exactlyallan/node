@@ -1,5 +1,5 @@
 #=============================================================================
-# Copyright (c) 2021, NVIDIA CORPORATION.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,35 +13,51 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #=============================================================================
+include_guard(GLOBAL)
 
-function(find_and_configure_cuspatial VERSION)
+function(find_and_configure_cuspatial)
 
-    include(get_cpm)
+    include(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/get_cpm.cmake)
+    include(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/get_version.cmake)
+    include(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ConfigureCUDF.cmake)
 
-    include(ConfigureCUDF)
+    _get_rapidsai_module_version(cuspatial VERSION)
 
-    _clean_build_dirs_if_not_fully_built(cuspatial libcuspatial.so)
+    _clean_build_dirs_if_not_fully_built(cuspatial libcuspatial)
 
+    _set_thrust_dir_if_exists()
+    _set_package_dir_if_exists(cudf cudf)
+    _set_package_dir_if_exists(cuco cuco)
+    _set_package_dir_if_exists(dlpack dlpack)
+    _set_package_dir_if_exists(jitify jitify)
+    _set_package_dir_if_exists(nvcomp nvcomp)
     _set_package_dir_if_exists(cuspatial cuspatial)
 
     if(NOT TARGET cuspatial::cuspatial)
         _get_major_minor_version(${VERSION} MAJOR_AND_MINOR)
         _get_update_disconnected_state(cuspatial ${VERSION} UPDATE_DISCONNECTED)
-        CPMFindPackage(NAME     cuspatial
-            VERSION             ${VERSION}
-            GIT_REPOSITORY      https://github.com/rapidsai/cuspatial.git
-            GIT_TAG             branch-${MAJOR_AND_MINOR}
-            GIT_SHALLOW         TRUE
+        CPMFindPackage(NAME        cuspatial
+            VERSION                ${VERSION}
+            # EXCLUDE_FROM_ALL       TRUE
+            GIT_REPOSITORY         https://github.com/rapidsai/cuspatial.git
+            GIT_TAG                branch-${MAJOR_AND_MINOR}
+            GIT_SHALLOW            TRUE
             ${UPDATE_DISCONNECTED}
-            SOURCE_SUBDIR       cpp
-            OPTIONS             "BUILD_TESTS OFF"
-                                "BUILD_BENCHMARKS OFF"
-                                "JITIFY_USE_CACHE ON"
-                                "PER_THREAD_DEFAULT_STREAM ON"
-                                "DISABLE_DEPRECATION_WARNING ON")
+            SOURCE_SUBDIR          cpp
+            OPTIONS                "BUILD_TESTS OFF"
+                                   "BUILD_BENCHMARKS OFF"
+                                   "BUILD_SHARED_LIBS OFF"
+                                   "CUDA_STATIC_RUNTIME ON"
+                                   "PER_THREAD_DEFAULT_STREAM ON"
+                                   "DISABLE_DEPRECATION_WARNING ON")
     endif()
     # Make sure consumers of our libs can see cuspatial::cuspatial
     _fix_cmake_global_defaults(cuspatial::cuspatial)
+
+    include(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/link_utils.cmake)
+    _statically_link_cuda_toolkit_libs(cuspatial::cuspatial)
+
+    set(cuspatial_VERSION "${cuspatial_VERSION}" PARENT_SCOPE)
 endfunction()
 
-find_and_configure_cuspatial(${CUSPATIAL_VERSION})
+find_and_configure_cuspatial()

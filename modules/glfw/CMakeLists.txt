@@ -13,9 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #=============================================================================
-cmake_minimum_required(VERSION 3.18...3.20 FATAL_ERROR)
-
-project(node_glfw VERSION 0.0.1 LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.24.1 FATAL_ERROR)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 unset(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
@@ -23,34 +21,41 @@ unset(CMAKE_LIBRARY_OUTPUT_DIRECTORY CACHE)
 
 option(NODE_RAPIDS_USE_SCCACHE "Enable caching compilation results with sccache" ON)
 
-# Set OpenGL_GL_PREFERENCE to "GLVND"
-cmake_policy(SET CMP0072 NEW)
-
 ###################################################################################################
 # - cmake modules ---------------------------------------------------------------------------------
 
 execute_process(COMMAND node -p
                 "require('@rapidsai/core').cmake_modules_path"
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                 OUTPUT_VARIABLE NODE_RAPIDS_CMAKE_MODULES_PATH
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-list(APPEND CMAKE_MODULE_PATH "${NODE_RAPIDS_CMAKE_MODULES_PATH}")
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/cmake_policies.cmake")
 
-include(ConfigureCXX)
-include(ConfigureNapi)
-include(ConfigureOpenGL)
-include(ConfigureOpenGLFW)
+project(rapidsai_glfw VERSION $ENV{npm_package_version} LANGUAGES C CXX)
+
+execute_process(COMMAND node -p
+                "require('path').dirname(require.resolve('@rapidsai/core'))"
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                OUTPUT_VARIABLE NODE_RAPIDS_CORE_MODULE_PATH
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/ConfigureCXX.cmake")
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/ConfigureNapi.cmake")
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/ConfigureOpenGL.cmake")
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/ConfigureOpenGLFW.cmake")
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/install_utils.cmake")
 
 function(_find_glfw VARIANT USE_WAYLAND USE_EGLHEADLESS)
     find_and_configure_glfw(
-        glfw_${VARIANT}
-        3.3.2                                   # version
-        https://github.com/trxcllnt/glfw.git    # git repo
-        fea/headless-egl-with-fallback          # git tag
-        OFF                                     # build + dynamically link libglfw.so
-        ${USE_WAYLAND}
-        ${USE_EGLHEADLESS}
+        VARIANT         ${VARIANT}
+        VERSION         3.3.2                                # version
+        GIT_REPO        https://github.com/trxcllnt/glfw.git # git repo
+        GIT_TAG         fea/headless-egl-with-fallback       # git tag
+        USE_SHARED_LIBS OFF                                  # build + dynamically link libglfw.so
+        USE_WAYLAND     ${USE_WAYLAND}
+        USE_EGLHEADLESS ${USE_EGLHEADLESS}
+        EXPORT_SET      rapidsai_glfw-exports
     )
 endfunction()
 
@@ -59,11 +64,11 @@ _find_glfw(x11 OFF OFF)
 _find_glfw(eglheadless OFF ON)
 
 ###################################################################################################
-# - node_glfw target ------------------------------------------------------------------------------
+# - rapidsai_glfw target --------------------------------------------------------------------------
 
 file(GLOB_RECURSE NODE_GLFW_SRC_FILES "src/*.cpp")
 
-function(make_node_glfw_target VARIANT DEFINES)
+function(make_rapidsai_glfw_target VARIANT DEFINES)
     add_library(${PROJECT_NAME}_${VARIANT} SHARED ${NODE_GLFW_SRC_FILES} ${CMAKE_JS_SRC})
 
     set_target_properties(${PROJECT_NAME}_${VARIANT}
@@ -75,7 +80,7 @@ function(make_node_glfw_target VARIANT DEFINES)
                 CXX_STANDARD_REQUIRED               ON
                 CUDA_STANDARD                       17
                 CUDA_STANDARD_REQUIRED              ON
-                # NO_SYSTEM_FROM_IMPORTED             ON
+                NO_SYSTEM_FROM_IMPORTED             ON
                 POSITION_INDEPENDENT_CODE           ON
                 INTERFACE_POSITION_INDEPENDENT_CODE ON
     )
@@ -99,15 +104,21 @@ function(make_node_glfw_target VARIANT DEFINES)
     )
 
     target_link_libraries(${PROJECT_NAME}_${VARIANT}
-                        ${CMAKE_JS_LIB}
-                        glfw::${VARIANT}
+                 PUBLIC glfw::${VARIANT}
                         OpenGL::EGL
-                        OpenGL::OpenGL)
+                        OpenGL::OpenGL
+                        "${NODE_RAPIDS_CORE_MODULE_PATH}/build/${CMAKE_BUILD_TYPE}/rapidsai_core.node")
 endfunction()
 
-make_node_glfw_target(x11 "-DGLFW_EXPOSE_NATIVE_X11")
-# make_node_glfw_target(wayland "-DGLFW_EXPOSE_NATIVE_WAYLAND")
-make_node_glfw_target(eglheadless "-DGLFW_EXPOSE_NATIVE_EGL_EXT -D_GLFW_EGL_LIBRARY=libEGL_nvidia.so.0")
+make_rapidsai_glfw_target(x11 "-DGLFW_EXPOSE_NATIVE_X11")
+# make_rapidsai_glfw_target(wayland "-DGLFW_EXPOSE_NATIVE_WAYLAND")
+make_rapidsai_glfw_target(eglheadless "-DGLFW_EXPOSE_NATIVE_EGL_EXT -D_GLFW_EGL_LIBRARY=libEGL_nvidia.so.0")
+
+generate_install_rules(
+  NAME           ${PROJECT_NAME}
+  GLOBAL_TARGETS ${PROJECT_NAME}_x11
+                 ${PROJECT_NAME}_eglheadless
+)
 
 # Create a symlink to compile_commands.json for the llvm-vs-code-extensions.vscode-clangd plugin
 execute_process(COMMAND

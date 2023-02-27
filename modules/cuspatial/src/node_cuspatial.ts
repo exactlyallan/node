@@ -15,6 +15,9 @@
 import {Column, FloatingPoint, Int32, Table, Uint32} from '@rapidsai/cudf';
 import {MemoryResource} from '@rapidsai/rmm';
 
+/** @ignore */
+export declare const _cpp_exports: any;
+
 export declare function createQuadtree<T extends FloatingPoint>(xs: Column<T>,
                                                                 ys: Column<T>,
                                                                 xMin: number,
@@ -75,3 +78,10 @@ export declare function findPolylineNearestToEachPoint<T extends FloatingPoint>(
   polylinePointsY: Column<T>,
   memoryResource
   ?: MemoryResource): {table: Table, names: ['point_index', 'polyline_index', 'distance']};
+
+export declare function lonLatToCartesian<T extends FloatingPoint>(
+  origin_lon: number,
+  origin_lat: number,
+  lats: Column<T>,
+  lons: Column<T>,
+  memoryResource?: MemoryResource): {x: Column<T>, y: Column<T>};

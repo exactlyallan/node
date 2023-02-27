@@ -1,5 +1,5 @@
 #=============================================================================
-# Copyright (c) 2020-2021, NVIDIA CORPORATION.
+# Copyright (c) 2020-2022, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #=============================================================================
+include_guard(GLOBAL)
 
 ###################################################################################################
 # - CMake properties ------------------------------------------------------------------------------
@@ -35,7 +36,7 @@ endif(NODE_RAPIDS_USE_SCCACHE)
 
 execute_process(COMMAND node -p
                 "require('@rapidsai/core').cpp_core_include_path"
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                 OUTPUT_VARIABLE RAPIDS_CORE_INCLUDE_DIR
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
 
@@ -44,12 +45,16 @@ message(STATUS "RAPIDS core include: ${RAPIDS_CORE_INCLUDE_DIR}")
 ###################################################################################################
 # - compiler options ------------------------------------------------------------------------------
 
-set(NODE_RAPIDS_CMAKE_C_FLAGS "")
-set(NODE_RAPIDS_CMAKE_CXX_FLAGS "")
-set(NODE_RAPIDS_CMAKE_CUDA_FLAGS "")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
+list(APPEND NODE_RAPIDS_CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
+list(APPEND NODE_RAPIDS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+list(APPEND NODE_RAPIDS_CMAKE_CUDA_FLAGS ${CMAKE_CUDA_FLAGS})
+
+unset(CMAKE_C_FLAGS)
+unset(CMAKE_C_FLAGS CACHE)
+unset(CMAKE_CXX_FLAGS)
+unset(CMAKE_CXX_FLAGS CACHE)
+unset(CMAKE_CUDA_FLAGS)
+unset(CMAKE_CUDA_FLAGS CACHE)
 
 if(CMAKE_COMPILER_IS_GNUCXX)
     option(NODE_RAPIDS_CMAKE_CXX11_ABI "Enable the GLIBCXX11 ABI" ON)

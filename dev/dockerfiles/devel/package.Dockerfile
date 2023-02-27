@@ -2,7 +2,7 @@
 
 ARG FROM_IMAGE
 
-FROM ${FROM_IMAGE}
+FROM ${FROM_IMAGE} as build
 
 WORKDIR /opt/rapids/node
 
@@ -10,15 +10,13 @@ ENV NVIDIA_DRIVER_CAPABILITIES all
 
 ARG CUDAARCHS=ALL
 ARG PARALLEL_LEVEL
+ARG NVCC_APPEND_FLAGS
 ARG RAPIDS_VERSION
 ARG SCCACHE_REGION
 ARG SCCACHE_BUCKET
 ARG SCCACHE_IDLE_TIMEOUT
 
 RUN echo -e "build env:\n$(env)"
-
-ARG AWS_ACCESS_KEY_ID
-ARG AWS_SECRET_ACCESS_KEY
 
 COPY --chown=rapids:rapids .npmrc        /home/node/.npmrc
 COPY --chown=rapids:rapids .npmrc        .npmrc
@@ -33,28 +31,37 @@ COPY --chown=rapids:rapids yarn.lock     yarn.lock
 COPY --chown=rapids:rapids scripts       scripts
 COPY --chown=rapids:rapids modules       modules
 
-USER root
+ENV RAPIDSAI_SKIP_DOWNLOAD=1
 
-RUN --mount=type=secret,id=sccache_credentials \
-    if [ -f /run/secrets/sccache_credentials ]; then set -a; . /run/secrets/sccache_credentials; set +a; fi; \
+RUN --mount=type=ssh,uid=1000,gid=1000,required=true \
+    --mount=type=secret,id=sccache_credentials,uid=1000,gid=1000 \
+    --mount=type=bind,source=dev/.ssh,target=/opt/rapids/.ssh,rw \
+    --mount=type=bind,source=dev/.gitconfig,target=/opt/rapids/.gitconfig \
+    sudo chown -R $(id -u):$(id -g) /opt/rapids; \
+    if [ -f /run/secrets/sccache_credentials ]; then \
+        export $(grep -v '^#' /run/secrets/sccache_credentials | xargs -d '\n'); \
+    fi; \
+    # Add GitHub's public keys to known_hosts
+    if [ ! -f /opt/rapids/.ssh/known_hosts ]; then \
+        curl -s https://api.github.com/meta | jq -r '.ssh_keys | map("github.com \(.)") | .[]' > /opt/rapids/.ssh/known_hosts; \
+    fi; \
     echo -e "build context:\n$(find .)" \
  && bash -c 'echo -e "\
 CUDAARCHS=$CUDAARCHS\n\
 PARALLEL_LEVEL=$PARALLEL_LEVEL\n\
+NVCC_APPEND_FLAGS=$NVCC_APPEND_FLAGS\n\
 RAPIDS_VERSION=$RAPIDS_VERSION\n\
 SCCACHE_REGION=$SCCACHE_REGION\n\
 SCCACHE_BUCKET=$SCCACHE_BUCKET\n\
 SCCACHE_IDLE_TIMEOUT=$SCCACHE_IDLE_TIMEOUT\n\
 " > .env' \
  && yarn --pure-lockfile --network-timeout 1000000 \
- && yarn tsc:build \
- && yarn cpp:build \
+ && yarn build \
  && yarn dev:npm:pack \
- && yarn cache clean \
- && cp build/*.tgz ../ \
- && cd .. && rm -rf node \
- && chown -R rapids:rapids .
+ && chown rapids:rapids build/*.{tgz,tar.gz} \
+ && mv build/*.tgz ../ && mv build/*.tar.gz ../
 
-USER rapids
+FROM alpine:latest
 
-WORKDIR /home/node
+COPY --from=build /opt/rapids/*.tgz /opt/rapids/
+COPY --from=build /opt/rapids/*.tar.gz /opt/rapids/

@@ -1,5 +1,5 @@
 #=============================================================================
-# Copyright (c) 2020-2021, NVIDIA CORPORATION.
+# Copyright (c) 2020-2022, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,34 +13,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #=============================================================================
+include_guard(GLOBAL)
 
-function(find_and_configure_rmm VERSION)
+function(find_and_configure_rmm)
 
-    include(get_cpm)
+    include(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/get_cpm.cmake)
+    include(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/get_version.cmake)
+    include(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ConfigureThrust.cmake)
 
-    include(ConfigureThrust)
+    _get_rapidsai_module_version(rmm VERSION)
 
+    _set_thrust_dir_if_exists()
     _set_package_dir_if_exists(rmm rmm)
     _set_package_dir_if_exists(spdlog spdlog)
-    _set_package_dir_if_exists(Thrust thrust)
 
     if(NOT TARGET rmm::rmm)
         _get_major_minor_version(${VERSION} MAJOR_AND_MINOR)
         _get_update_disconnected_state(rmm ${VERSION} UPDATE_DISCONNECTED)
-        CPMFindPackage(NAME     rmm
-            VERSION             ${VERSION}
-            GIT_REPOSITORY      https://github.com/rapidsai/rmm.git
-            GIT_TAG             branch-${MAJOR_AND_MINOR}
-            GIT_SHALLOW         TRUE
+        CPMFindPackage(NAME        rmm
+            # EXCLUDE_FROM_ALL       TRUE
+            VERSION                ${VERSION}
+            GIT_REPOSITORY         https://github.com/rapidsai/rmm.git
+            GIT_TAG                branch-${MAJOR_AND_MINOR}
+            GIT_SHALLOW            TRUE
             ${UPDATE_DISCONNECTED}
-            OPTIONS             "BUILD_TESTS OFF"
-                                "BUILD_BENCHMARKS OFF"
-                                "DISABLE_DEPRECATION_WARNING ${DISABLE_DEPRECATION_WARNINGS}")
+            OPTIONS               "BUILD_TESTS OFF"
+                                  "BUILD_BENCHMARKS OFF"
+                                  "DISABLE_DEPRECATION_WARNING ${DISABLE_DEPRECATION_WARNINGS}")
     endif()
     # Make sure consumers of our libs can see rmm::rmm
     _fix_cmake_global_defaults(rmm::rmm)
     _fix_cmake_global_defaults(rmm::Thrust)
     _fix_cmake_global_defaults(rmm::spdlog_header_only)
+
+    set(rmm_VERSION "${rmm_VERSION}" PARENT_SCOPE)
 endfunction()
 
-find_and_configure_rmm(${RMM_VERSION})
+find_and_configure_rmm()

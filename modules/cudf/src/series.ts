@@ -29,7 +29,7 @@ import {
 } from '@rapidsai/cuda';
 import {DeviceBuffer, MemoryResource} from '@rapidsai/rmm';
 import * as arrow from 'apache-arrow';
-import {VectorType} from 'apache-arrow/interfaces';
+import {JavaScriptArrayDataType} from 'apache-arrow/interfaces';
 import {compareTypes} from 'apache-arrow/visitor/typecomparator';
 
 import {Column} from './column';
@@ -195,30 +195,26 @@ export class AbstractSeries<T extends DataType = any> {
    * import {Series, Int32} from '@rapidsai/cudf';
    * import * as arrow from 'apache-arrow';
    *
-   * const arrow_vec = arrow.Vector.from({
-   *         type: new Int32,
-   *         values: [1,2,3,4],
-   *         highWaterMark: Infinity
-   *       });
+   * const arrow_vec = arrow.vectorFromArray(new Int32Array([1,2,3,4])));
    * const a = Series.new(arrow_vec); // Int32Series [1, 2, 3, 4]
    *
-   * const arrow_vec_list = arrow.Vector.from({
-   *   values: [[0, 1, 2], [3, 4, 5], [6, 7, 8]],
-   *   type: new arrow.List(arrow.Field.new({ name: 'ints', type: new arrow.Int32 })),
-   * });
+   * const arrow_vec_list = arrow.vectorFromArray(
+   *   [[0, 1, 2], [3, 4, 5], [6, 7, 8]],
+   *   new arrow.List(arrow.Field.new({ name: 'ints', type: new arrow.Int32 })),
+   * );
    *
    * const b = Series.new(arrow_vec_list) // ListSeries [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
    *
-   * const arrow_vec_struct = arrow.Vector.from({
-   *   values: [{ x: 0, y: 3 }, { x: 1, y: 4 }, { x: 2, y: 5 }],
-   *   type: new arrow.Struct([
+   * const arrow_vec_struct = arrow.vectorFromArray(
+   *   [{ x: 0, y: 3 }, { x: 1, y: 4 }, { x: 2, y: 5 }],
+   *   new arrow.Struct([
    *     arrow.Field.new({ name: 'x', type: new arrow.Int32 }),
    *     arrow.Field.new({ name: 'y', type: new arrow.Int32 })
    *   ]),
-   * });
+   * );
    *
-   * const c = Series.new(arrow_vec_struct); // StructSeries  [{ x: 0, y: 3 }, { x: 1, y: 4 },
-   * // { x: 2, y: 5 }]
+   * const c = Series.new(arrow_vec_struct);
+   * // StructSeries  [{ x: 0, y: 3 }, { x: 1, y: 4 }, { x: 2, y: 5 }]
    * ```
    */
   static new<T extends arrow.Vector>(input: T): Series<ArrowToCUDFType<T['type']>>;
@@ -518,6 +514,9 @@ export class AbstractSeries<T extends DataType = any> {
    */
   static new(input: (Date|null|undefined)[][]): Series<List<TimestampMillisecond>>;
 
+  static new<T extends readonly unknown[]>(input: T):
+    Series<ArrowToCUDFType<JavaScriptArrayDataType<T>>>;
+
   static new<T extends DataType>(input: AbstractSeries<T>|Column<T>|SeriesProps<T>|arrow.Vector<T>|
                                  (string|null|undefined)[]|(number|null|undefined)[]|
                                  (bigint|null|undefined)[]|(boolean|null|undefined)[]|
@@ -665,7 +664,7 @@ export class AbstractSeries<T extends DataType = any> {
   _castAsUint64(_memoryResource?: MemoryResource): Series<Uint64> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Uint64 unimplemented`); }
   _castAsFloat32(_memoryResource?: MemoryResource): Series<Float32> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Float32 unimplemented`); }
   _castAsFloat64(_memoryResource?: MemoryResource): Series<Float64> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to Float64 unimplemented`); }
-  _castAsString(_memoryResource?: MemoryResource): StringSeries { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to String unimplemented`); }
+  _castAsString(_memoryResource?: MemoryResource): Series<Utf8String> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to String unimplemented`); }
   _castAsTimeStampDay(_memoryResource?: MemoryResource): Series<TimestampDay> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampDay unimplemented`); }
   _castAsTimeStampSecond(_memoryResource?: MemoryResource): Series<TimestampSecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampSecond unimplemented`); }
   _castAsTimeStampMillisecond(_memoryResource?: MemoryResource): Series<TimestampMillisecond> { throw new Error(`cast from ${arrow.Type[this.type.typeId]} to TimeStampMillisecond unimplemented`); }
@@ -706,8 +705,8 @@ export class AbstractSeries<T extends DataType = any> {
    * Series.new([1, 2, 3]).concat(Series.new([4, 5, 6])) // [1, 2, 3, 4, 5, 6]
    * ```
    */
-  concat<R extends DataType>(other: Series<R>,
-                             memoryResource?: MemoryResource): Series<CommonType<T, R>> {
+  concat<R extends Series<DataType>>(other: R, memoryResource?: MemoryResource):
+    Series<CommonType<T, R['type']>> {
     type U     = typeof type;
     const type = findCommonType(this.type, other.type);
     const lhs  = <Column<U>>(compareTypes(type, this.type) ? this._col : this.cast(type)._col);
@@ -1225,7 +1224,7 @@ export class AbstractSeries<T extends DataType = any> {
    * Copy the underlying device memory to host, and return an Iterator of the values.
    */
   [Symbol.iterator](): IterableIterator<T['TValue']|null> {
-    return this.toArrow()[Symbol.iterator]() as IterableIterator<T['TValue']|null>;
+    return this.toArrow()[Symbol.iterator]();
   }
 
   /**
@@ -1261,9 +1260,9 @@ export class AbstractSeries<T extends DataType = any> {
   /**
    * Copy a Series to an Arrow vector in host memory
    */
-  toArrow(): VectorType<T> {
+  toArrow() {
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    return new DataFrame({0: this._col}).toArrow().getChildAt<T>(0)!.chunks[0] as VectorType<T>;
+    return new DataFrame({0: this._col}).toArrow().getChildAt<T>(0)!;
   }
 
   /**
@@ -1271,6 +1270,7 @@ export class AbstractSeries<T extends DataType = any> {
    *
    * @param ascending whether to sort ascending (true) or descending (false)
    * @param null_order whether nulls should sort before or after other values
+   * @param memoryResource An optional MemoryResource used to allocate the result's device memory.
    *
    * @returns Series containting the permutation indices for the desired sort order
    *
@@ -1295,9 +1295,12 @@ export class AbstractSeries<T extends DataType = any> {
    * Series.new([50, 40, 30, 20, 10, null]).orderBy(false, 'after') // [5, 0, 1, 2, 3, 4]
    * ```
    */
-  orderBy(ascending = true, null_order: keyof typeof NullOrder = 'after') {
-    return Series.new(
-      new Table({columns: [this._col]}).orderBy([ascending], [NullOrder[null_order]]));
+  orderBy(ascending                          = true,
+          null_order: keyof typeof NullOrder = 'after',
+          memoryResource?: MemoryResource) {
+    return Series.new(new Table({
+                        columns: [this._col]
+                      }).orderBy([ascending], [null_order === 'before'], memoryResource));
   }
 
   /**
@@ -1485,15 +1488,13 @@ export class AbstractSeries<T extends DataType = any> {
    * ) // [1, 2, 3]
    * ```
    */
-  dropDuplicates(keep: boolean,
-                 nullsEqual: boolean,
-                 nullsFirst: boolean,
+  dropDuplicates(keep       = true,
+                 nullsEqual = true,
+                 nullsFirst = true,
                  memoryResource?: MemoryResource) {
-    return this.__construct(
-      new Table({columns: [this._col]})
-        .dropDuplicates(
-          [0], DuplicateKeepOption[keep ? 'first' : 'none'], nullsEqual, nullsFirst, memoryResource)
-        .getColumnByIndex(0));
+    return new DataFrame({0: this})
+      .dropDuplicates(keep ? 'first' : 'none', nullsEqual, nullsFirst, ['0'], memoryResource)
+      .get('0');
   }
 }
 
@@ -1592,7 +1593,7 @@ function inferType(value: any[]): DataType {
       Object.keys(val).forEach((key) => {
         if (!fields.has(key)) {
           // use the type inferred for the first instance of a found key
-          fields.set(key, new arrow.Field(key, inferType(val[key])));
+          fields.set(key, new arrow.Field(key, inferType([val[key]]), true));
         }
       });
     }, {});
@@ -1687,13 +1688,8 @@ function asColumn<T extends DataType>(value: any) {
 
     // If `data` is an Array, convert it to a Vector and use C++ Arrow-to-cuDF conversion
     if (Array.isArray(data)) {
-      return fromArrow<T>(arrow.Vector.from({
-        highWaterMark: Infinity,
-        type: value.type ?? inferType(data),
-        // Slice `offset` from the Array before converting so
-        // we don't write unnecessary values with the Arrow builders.
-        values: typeof offset !== 'number' ? data : data.slice(offset)
-      }));
+      return fromArrow<T>(arrow.vectorFromArray(
+        typeof offset !== 'number' ? data : data.slice(offset), value.type ?? inferType(data)));
     }
 
     // If `data.buffer` is a ArrayBuffer, copy it to a DeviceBuffer

@@ -4,583 +4,224 @@ on:
   push:
     branches:
       - main
-
-env:
-  NODE: "16.13.2"
-  RAPIDS: "22.02.00"
-  REPOSITORY: "ghcr.io/rapidsai/node"
+  workflow_dispatch:
 
 concurrency:
-  group: build_docker_images
+  group: build-docker-images-on-${{ github.event_name }}-from-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
 
   build-and-publish-devel-main-image:
-    name: Build devel main image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            dev/dockerfiles/devel/main\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        uses: ./.github/actions/build-and-publish-image
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/devel/main.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-main
-          build-args: |
-            "NODE_VERSION=${{ env.NODE }}"
-            "SCCACHE_IDLE_TIMEOUT=32768"
-            "SCCACHE_REGION=us-west-2"
-            "SCCACHE_BUCKET=node-rapids-sccache"
-            "ARM64_BASE=nvcr.io/nvidia/l4t-cuda:10.2.460-runtime"
-            "AMD64_BASE=nvidia/cuda:${{ matrix.CUDA }}-devel-${{ matrix.LINUX }}"
+    name: Build and publish devel main image
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      image: devel-main
+      file: dev/dockerfiles/devel/main.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
+      files-to-diff: |
+        modules
+      build-args: |
+        "UCX_VERSION=1.12.1"
 
   build-and-publish-devel-packages-image:
+    name: Build devel packages image
     needs:
       - build-and-publish-devel-main-image
-    name: Build devel packages image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules
-            yarn\.lock
-            package\.json
-            dev/dockerfiles/devel/(main|package)\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        uses: ./.github/actions/build-and-publish-image
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/devel/package.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages
-          build-args: |
-            "CUDAARCHS=ALL"
-            "PARALLEL_LEVEL=1"
-            "SCCACHE_IDLE_TIMEOUT=32768"
-            "SCCACHE_REGION=us-west-2"
-            "SCCACHE_BUCKET=node-rapids-sccache"
-            "RAPIDS_VERSION=${{ env.RAPIDS }}"
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-main"
+    uses: ./.github/workflows/build-and-push-image-ssh.yml
+    secrets: inherit
+    with:
+      from_: devel-main
+      image: devel-packages
+      file: dev/dockerfiles/devel/package.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
+      files-to-diff: |
+        modules
+        dev/dockerfiles/devel/main.Dockerfile
+      build-args: |
+        "CUDAARCHS=ALL"
+        "SCCACHE_IDLE_TIMEOUT=32768"
+        "SCCACHE_REGION=us-west-2"
+        "SCCACHE_BUCKET=node-rapids-sccache"
 
   build-and-publish-runtime-cuda-base-image:
+    name: Build runtime cuda-base image
     needs:
       - build-and-publish-devel-main-image
-      - build-and-publish-devel-packages-image
-    name: Build runtime cuda-base image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            dev/dockerfiles/runtime/base\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/base.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-base
-          build-args: |
-            "UID=1000"
-            "ARM64_BASE=nvcr.io/nvidia/l4t-cuda:10.2.460-runtime"
-            "AMD64_BASE=nvidia/cuda:${{ matrix.CUDA }}-runtime-${{ matrix.LINUX }}"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-main"
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      image: runtime-base
+      devel: devel-main
+      file: dev/dockerfiles/runtime/base.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
+      build-args: |
+        "UID=1000"
 
   build-and-publish-runtime-cudf-image:
-    needs:
-      - build-and-publish-devel-packages-image
-      - build-and-publish-runtime-cuda-base-image
     name: Build runtime cudf image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules/(rmm|core|cuda|cudf)
-            dev/dockerfiles/runtime/cudf\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/cudf.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-cudf
-          build-args: |
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-base"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages"
-
-  build-and-publish-runtime-cugraph-image:
     needs:
       - build-and-publish-devel-packages-image
       - build-and-publish-runtime-cuda-base-image
-    name: Build runtime cugraph image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules/(rmm|core|cuda|cudf|cugraph)
-            dev/dockerfiles/runtime/cugraph\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/cugraph.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-cugraph
-          build-args: |
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-base"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages"
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      from_: runtime-base
+      image: runtime-cudf
+      build: devel-packages
+      devel: devel-main
+      file: dev/dockerfiles/runtime/cudf.Dockerfile
+      files-to-diff: |
+        modules/(core|rmm|cuda|cudf)
+        dev/dockerfiles/runtime/base.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
 
   build-and-publish-runtime-cuml-image:
+    name: Build runtime cuml image
     needs:
       - build-and-publish-devel-packages-image
       - build-and-publish-runtime-cuda-base-image
-    name: Build runtime cuml image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules/(rmm|core|cuda|cudf|cuml)
-            dev/dockerfiles/runtime/cuml\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/cuml.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-cuml
-          build-args: |
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-base"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages"
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      from_: runtime-base
+      image: runtime-cuml
+      build: devel-packages
+      devel: devel-main
+      file: dev/dockerfiles/runtime/cuml.Dockerfile
+      files-to-diff: |
+        modules/(core|rmm|cuda|cudf|cuml)
+        dev/dockerfiles/runtime/base.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
+
+  build-and-publish-runtime-cugraph-image:
+    name: Build runtime cugraph image
+    needs:
+      - build-and-publish-devel-packages-image
+      - build-and-publish-runtime-cuda-base-image
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      from_: runtime-base
+      image: runtime-cugraph
+      build: devel-packages
+      devel: devel-main
+      file: dev/dockerfiles/runtime/cugraph.Dockerfile
+      files-to-diff: |
+        modules/(core|rmm|cuda|cudf|cugraph)
+        dev/dockerfiles/runtime/base.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
 
   build-and-publish-runtime-cuspatial-image:
+    name: Build runtime cuspatial image
     needs:
       - build-and-publish-devel-packages-image
       - build-and-publish-runtime-cuda-base-image
-    name: Build runtime cuspatial image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules/(rmm|core|cuda|cudf|cuspatial)
-            dev/dockerfiles/runtime/cuspatial\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/cuspatial.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-cuspatial
-          build-args: |
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-base"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages"
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      from_: runtime-base
+      image: runtime-cuspatial
+      build: devel-packages
+      devel: devel-main
+      file: dev/dockerfiles/runtime/cuspatial.Dockerfile
+      files-to-diff: |
+        modules/(core|rmm|cuda|cudf|cuspatial)
+        dev/dockerfiles/runtime/base.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
 
   build-and-publish-runtime-glfw-image:
+    name: Build runtime glfw image
     needs:
       - build-and-publish-devel-packages-image
       - build-and-publish-runtime-cuda-base-image
-    name: Build runtime glfw image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules/(core|glfw|webgl)
-            dev/dockerfiles/runtime/glfw\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/glfw.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-glfw
-          build-args: |
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-base"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages"
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      from_: runtime-base
+      image: runtime-glfw
+      build: devel-packages
+      devel: devel-main
+      file: dev/dockerfiles/runtime/glfw.Dockerfile
+      files-to-diff: |
+        modules/(core|glfw|webgl)
+        dev/dockerfiles/runtime/base.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
 
   build-and-publish-runtime-sql-image:
+    name: Build runtime sql image
     needs:
       - build-and-publish-devel-packages-image
       - build-and-publish-runtime-cuda-base-image
-    name: Build runtime sql image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules/(rmm|core|cuda|cudf|sql)
-            dev/dockerfiles/runtime/sql\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/sql.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-sql
-          build-args: |
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-base"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages"
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      from_: runtime-base
+      image: runtime-sql
+      build: devel-packages
+      devel: devel-main
+      file: dev/dockerfiles/runtime/sql.Dockerfile
+      files-to-diff: |
+        modules/(core|rmm|cuda|cudf|sql)
+        dev/dockerfiles/runtime/base.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
+      build-args: |
+        "UCX_VERSION=1.12.1"
 
   build-and-publish-runtime-main-image:
+    name: Build runtime main image
     needs:
       - build-and-publish-devel-packages-image
       - build-and-publish-runtime-cuda-base-image
-    name: Build runtime main image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules/(core|cuda|glfw|webgl|rmm|cudf|sql|cuml|cugraph|cuspatial|deck\.gl|jsdom)
-            dev/dockerfiles/runtime/main\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/main.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-main
-          build-args: |
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-base"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages"
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      from_: runtime-base
+      image: runtime-main
+      build: devel-packages
+      devel: devel-main
+      file: dev/dockerfiles/runtime/main.Dockerfile
+      files-to-diff: |
+        modules/(core|cuda|glfw|webgl|rmm|cudf|sql|cuml|cugraph|cuspatial|deck.gl|jsdom)
+        dev/dockerfiles/runtime/base.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
+      build-args: |
+        "UCX_VERSION=1.12.1"
 
   build-and-publish-runtime-demo-image:
+    name: Build runtime demo image
     needs:
       - build-and-publish-devel-packages-image
       - build-and-publish-runtime-cuda-base-image
-    name: Build runtime demo image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules
-            dev/dockerfiles/runtime/demo\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/demo.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-demo
-          build-args: |
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-base"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages"
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      from_: runtime-base
+      image: runtime-demo
+      build: devel-packages
+      devel: devel-main
+      file: dev/dockerfiles/runtime/demo.Dockerfile
+      files-to-diff: |
+        modules/demo
+        dev/dockerfiles/runtime/base.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}
+      build-args: |
+        "UCX_VERSION=1.12.1"
 
   build-and-publish-runtime-notebook-image:
+    name: Build runtime notebook image
     needs:
       - build-and-publish-runtime-demo-image
-    name: Build runtime notebook image
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: true
-      matrix:
-        CUDA: ["11.6.0"]
-        LINUX: [ubuntu18.04, ubuntu20.04]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          lfs: true
-          fetch-depth: 2
-      - name: Checkout LFS
-        run: git lfs checkout
-      - name: Check if files changed
-        id: files_changed
-        uses: tj-actions/changed-files@v9.1
-        with:
-          files: |
-            \.npmrc
-            modules
-            **/*\.ipynb
-            dev/dockerfiles/runtime/notebook\.Dockerfile
-            \.github/workflows/merge\.pr\.yml
-            \.github/actions/build-and-publish-image/action\.yml
-      - name: Build and push image
-        uses: ./.github/actions/build-and-publish-image
-        if: ${{ steps.files_changed.outputs.any_changed == 'true' || steps.files_changed.outputs.any_deleted == 'true' }}
-        with:
-          registry-url: ghcr.io
-          registry-username: ${{ github.repository_owner }}
-          registry-password: ${{ github.token }}
-          pull: true
-          push: ${{ github.event_name == 'push' }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          file: dev/dockerfiles/runtime/notebook.Dockerfile
-          tags: |
-            ${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-notebook
-          build-args: |
-            "FROM_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-runtime-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-demo"
-            "DEVEL_IMAGE=${{ env.REPOSITORY }}:${{ env.RAPIDS }}-devel-node${{ env.NODE }}-cuda${{ matrix.CUDA }}-${{ matrix.LINUX }}-packages"
+    uses: ./.github/workflows/build-and-push-image.yml
+    secrets: inherit
+    with:
+      from_: runtime-demo
+      image: runtime-notebook
+      file: dev/dockerfiles/runtime/notebook.Dockerfile
+      files-to-diff: |
+        **/*.ipynb
+        modules/demo
+        dev/dockerfiles/runtime/base.Dockerfile
+        dev/dockerfiles/runtime/demo.Dockerfile
+      manual-build: ${{ github.event_name == 'workflow_dispatch' }}

@@ -82,7 +82,7 @@ export function concat<TFirst extends DataFrame, TRest extends DataFrame[]>(firs
       let data: any[]|undefined;
       return (type: DataType) => {
         // Lazily create and reuse the empty data Array
-        data = data || new Array(df.numRows);
+        data = data || new Array(df.numRows).fill(null);
         return Series.new({type, data})._col;
       };
     })();
@@ -104,6 +104,8 @@ export function concat<TFirst extends DataFrame, TRest extends DataFrame[]>(firs
       names.reduce((map, name, index) => ({...map, [name]: columns[index]}), {}));
   });
 
+  const constructChild = (tables[0] as any).__constructChild.bind(tables[0]);
+
   const result = Table.concat(tables.map((df) => df.asTable()));
 
   type TResultTypeMap = ConcatTypeMap<TFirst, TRest>;
@@ -111,7 +113,7 @@ export function concat<TFirst extends DataFrame, TRest extends DataFrame[]>(firs
   // clang-format off
   return new DataFrame(
     names.reduce((map, name, index) =>
-    ({...map, [name]: Series.new(result.getColumnByIndex(index))}),
+    ({...map, [name]: constructChild(name, result.getColumnByIndex(index))}),
     {} as SeriesMap<{[P in keyof TResultTypeMap]: TResultTypeMap[P]}>)
   ) as TResultTypeMap[keyof TResultTypeMap] extends never
     ? never

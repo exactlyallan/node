@@ -23,11 +23,12 @@ import {
   Uint8,
 } from '@rapidsai/cudf';
 import {Quadtree} from '@rapidsai/cuspatial';
-import {Table} from 'apache-arrow';
-import {createReadStream, existsSync} from 'fs';
+import {tableFromIPC} from 'apache-arrow';
+import {existsSync} from 'fs';
+import {readFile as fsReadFile} from 'fs/promises';
 import * as Path from 'path';
 
-import loadSpatialDataset from './data';
+import * as loadSpatialDataset from './data';
 
 /**
  * @param {Map<number, [number, number, number, number]>} colorMap
@@ -88,8 +89,7 @@ export async function loadPointsNearEachCensusTract(colorMap) {
 export async function loadTracts() {
   console.time(`load geometry Arrow table (${(263).toLocaleString()} polys)`);
 
-  const table =
-    await Table.from(createReadStream(Path.join(__dirname, 'data', '263_tracts.arrow')));
+  const table = tableFromIPC(await fsReadFile(Path.join(__dirname, 'data', '263_tracts.arrow')));
 
   console.timeEnd(`load geometry Arrow table (${(263).toLocaleString()} polys)`);
 
@@ -142,12 +142,13 @@ export async function loadPoints() {
     try {
       console.time(`load points Arrow table (${(168898952).toLocaleString()} points)`);
       const filePath = Path.join(__dirname, 'data', '168898952_points.arrow');
-      if (!existsSync(filePath)) { throw new Error('file not found'); }
-      const table = await Table.from(createReadStream(filePath));
+      if (!existsSync(filePath)) { throw new Error(`file not found: "${filePath}"`); }
+      const table = tableFromIPC(await fsReadFile(filePath));
       console.timeEnd(`load points Arrow table (${(168898952).toLocaleString()} points)`);
       return table;
     } catch (e) {
       if (loadDatasetIfNotFound) {
+        console.error(e);
         console.log('dataset not found, now downloading...');
         return await loadSpatialDataset().then(() => loadPointsTable(false))
       }

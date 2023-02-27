@@ -19,17 +19,13 @@
 
 #include <napi.h>
 
-std::ostream& operator<<(std::ostream& os, const nv::NapiToCPP& self) {
-  return os << self.operator std::string();
-};
-
-struct node_webgl : public nv::EnvLocalAddon, public Napi::Addon<node_webgl> {
-  node_webgl(Napi::Env const& env, Napi::Object exports) : nv::EnvLocalAddon(env, exports) {
+struct rapidsai_webgl : public nv::EnvLocalAddon, public Napi::Addon<rapidsai_webgl> {
+  rapidsai_webgl(Napi::Env const& env, Napi::Object exports) : nv::EnvLocalAddon(env, exports) {
     DefineAddon(
       exports,
       {
         InstanceValue("_cpp_exports", _cpp_exports.Value()),
-        InstanceMethod("init", &node_webgl::InitAddon),
+        InstanceMethod("init", &rapidsai_webgl::InitAddon),
         InstanceValue("WebGL2RenderingContext",
                       InitClass<nv::WebGL2RenderingContext>(env, exports)),
         InstanceValue("WebGLActiveInfo", InitClass<nv::WebGLActiveInfo>(env, exports)),
@@ -54,4 +50,4 @@ struct node_webgl : public nv::EnvLocalAddon, public Napi::Addon<node_webgl> {
   }
 };
 
-NODE_API_ADDON(node_webgl);
+NODE_API_ADDON(rapidsai_webgl);

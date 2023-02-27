@@ -1,5 +1,5 @@
 #=============================================================================
-# Copyright (c) 2020, NVIDIA CORPORATION.
+# Copyright (c) 2020-2022, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,9 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #=============================================================================
-cmake_minimum_required(VERSION 3.18...3.20 FATAL_ERROR)
-
-project(node_cuda VERSION 0.0.1 LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.24.1 FATAL_ERROR)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 unset(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
@@ -28,18 +26,27 @@ option(NODE_RAPIDS_USE_SCCACHE "Enable caching compilation results with sccache"
 
 execute_process(COMMAND node -p
                 "require('@rapidsai/core').cmake_modules_path"
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                 OUTPUT_VARIABLE NODE_RAPIDS_CMAKE_MODULES_PATH
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-list(APPEND CMAKE_MODULE_PATH "${NODE_RAPIDS_CMAKE_MODULES_PATH}")
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/cmake_policies.cmake")
 
-include(ConfigureCXX)
-include(ConfigureCUDA)
-include(ConfigureNapi)
+project(rapidsai_cuda VERSION $ENV{npm_package_version} LANGUAGES C CXX)
+
+execute_process(COMMAND node -p
+                "require('path').dirname(require.resolve('@rapidsai/core'))"
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                OUTPUT_VARIABLE NODE_RAPIDS_CORE_MODULE_PATH
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/ConfigureCXX.cmake")
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/ConfigureCUDA.cmake")
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/ConfigureNapi.cmake")
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/install_utils.cmake")
 
 ###################################################################################################
-# - node_cuda target ------------------------------------------------------------------------------
+# - rapidsai_cuda target ------------------------------------------------------------------------------
 
 file(GLOB_RECURSE NODE_CUDA_SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
@@ -70,12 +77,27 @@ target_include_directories(${PROJECT_NAME}
            "$<BUILD_INTERFACE:${NAPI_INCLUDE_DIRS}>"
 )
 
+target_compile_definitions(${PROJECT_NAME}
+    PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:CUDA_API_PER_THREAD_DEFAULT_STREAM>"
+           "$<$<COMPILE_LANGUAGE:CUDA>:CUDA_API_PER_THREAD_DEFAULT_STREAM>"
+)
+
 target_link_libraries(${PROJECT_NAME}
-                      ${CMAKE_JS_LIB}
-                      CUDA::nvrtc
-                      CUDA::cudart
-                      CUDA::nppig
-                      CUDA::nppicc)
+               PUBLIC ${CMAKE_JS_LIB}
+                      CUDA::nvrtc_static
+                      CUDA::cudart_static
+                      CUDA::nppig_static
+                      CUDA::nppicc_static
+                      "${NODE_RAPIDS_CORE_MODULE_PATH}/build/${CMAKE_BUILD_TYPE}/rapidsai_core.node")
+
+include("${NODE_RAPIDS_CMAKE_MODULES_PATH}/cuda_arch_helpers.cmake")
+generate_arch_specific_custom_targets(
+  NAME ${PROJECT_NAME}
+)
+
+generate_install_rules(
+  NAME ${PROJECT_NAME}
+  CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
 
 # Create a symlink to compile_commands.json for the llvm-vs-code-extensions.vscode-clangd plugin
 execute_process(COMMAND
