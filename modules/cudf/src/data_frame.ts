@@ -506,7 +506,7 @@ export class DataFrame<T extends TypeMap = any> {
     return this.drop(names).assign(
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       names.reduce((xs, x) => ({...xs, [`${nameMap[x]!}`]: this.get(x)}),
-                   {} as SeriesMap<{[K in keyof P as `${NonNullable<P[K]>}`]: T[string & K]}>));
+                   {} as SeriesMap<{[K in keyof P as `${NonNullable < P[K] >}`]: T[string & K]}>));
   }
 
   /**
@@ -569,8 +569,8 @@ export class DataFrame<T extends TypeMap = any> {
   cast<R extends {[P in keyof T]?: DataType}>(dataTypes: R, memoryResource?: MemoryResource) {
     const names = this.names;
     const types = !(dataTypes instanceof arrow.DataType)
-                    ? dataTypes
-                    : names.reduce((types, name) => ({...types, [name]: dataTypes}), {} as R);
+                  ? dataTypes
+                  : names.reduce((types, name) => ({...types, [name]: dataTypes}), {} as R);
     return new DataFrame(names.reduce(
       (columns, name) => ({
         ...columns,
@@ -719,12 +719,11 @@ export class DataFrame<T extends TypeMap = any> {
                  const table = includeNulls ? df.asTable().explodeOuterPosition(i, mr)  //
                                             : df.asTable().explodePosition(i, mr);
                  return new DataFrame(df.names.reduce((series_map, name, index) => {
-                   if (index <= i) {
-                     series_map[name] =
-                       (this.get(name) as any).elements.__construct(table.getColumnByIndex(index));
+                   if (index === i) {
+                     series_map[name] = Series.new(table.getColumnByIndex(index));
                    } else {
                      series_map[name] =
-                       df.__constructChild(name, table.getColumnByIndex(index + 1));
+                       df.__constructChild(name, table.getColumnByIndex(+(index >= i) + index));
                    }
                    return series_map;
                  }, {} as SeriesMap<U>));
@@ -2283,7 +2282,7 @@ export class DataFrame<T extends TypeMap = any> {
     const table = scope(() => {
       const spec = {ascending: true, null_order: nullsFirst ? 'before' : 'after'};
       const by   = subset.reduce((by, key) => Object.assign(by, {[key]: spec}),
-                               {} as {[P in keyof T]: OrderSpec});
+                                 {} as {[P in keyof T]: OrderSpec});
       return this.sortValues(by).asTable().unique(
         column_indices, DuplicateKeepOption[keep], nullsEqual, memoryResource);
     }, [this]);
